@@ -71,6 +71,23 @@ describe("meeting-minutes run receipt", () => {
     expect(redone?.delivery.idempotency_key).not.toBe(original?.delivery.idempotency_key);
   });
 
+  it("keeps the legacy receipt identity when receipt revision is absent or zero", async () => {
+    const original = await buildMeetingMinutesRunReceipt(completedRun());
+    const zero = await buildMeetingMinutesRunReceipt(completedRun({ receiptRevision: 0 }));
+    expect(zero?.run.external_run_id).toBe(original?.run.external_run_id);
+    expect(zero?.delivery.idempotency_key).toBe(original?.delivery.idempotency_key);
+  });
+
+  it("scopes an OutcomeCase correction to a separate receipt identity", async () => {
+    const original = await buildMeetingMinutesRunReceipt(completedRun({ revision: 1 }));
+    const corrected = await buildMeetingMinutesRunReceipt(completedRun({ revision: 1, receiptRevision: 1,
+      outcomeCaseId: "case_02" }));
+    expect(corrected?.run.external_run_id).toBe(
+      "mana:meeting-minutes:run-1:revision:1:receipt-revision:1",
+    );
+    expect(corrected?.delivery.idempotency_key).not.toBe(original?.delivery.idempotency_key);
+  });
+
   it("uses the canonical project code, not Mana's internal destination project ID", async () => {
     const original = await buildMeetingMinutesRunReceipt(completedRun());
     const sameGraphProject = await buildMeetingMinutesRunReceipt(completedRun({

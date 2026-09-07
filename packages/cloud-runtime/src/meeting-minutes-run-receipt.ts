@@ -148,8 +148,12 @@ export async function buildMeetingMinutesRunReceipt(run: MeetingMinutesRun): Pro
     || run.statusProjection?.outcome !== "completed" || !readback || !run.github
     || run.taskRegistration?.pending || run.taskRegistration?.failure) return undefined;
   // A redo is a new terminal execution even though it intentionally reuses the
-  // durable source run id. Keep its immutable receipt identity separate.
-  const externalRunId = `mana:meeting-minutes:${run.runId}:revision:${run.revision ?? 0}`;
+  // durable source run id. Keep its immutable receipt identity separate. A
+  // receipt-only correction gets its own suffix so it cannot alter the redo
+  // generation fence. Preserve the legacy identity when the suffix is absent.
+  const receiptRevision = run.receiptRevision ?? 0;
+  const externalRunId = `mana:meeting-minutes:${run.runId}:revision:${run.revision ?? 0}`
+    + (receiptRevision > 0 ? `:receipt-revision:${receiptRevision}` : "");
   // projectId is Mana's internal destination identifier. OutcomeCase links are
   // authorized against the Graph project code, so both the receipt and its
   // identity must use that canonical code.

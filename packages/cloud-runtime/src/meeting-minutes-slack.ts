@@ -697,6 +697,21 @@ export class MeetingMinutesSlackClient {
       text: message.text, blocks: message.blocks });
     return run.slack.processingTs;
   }
+  async showRedoSuperseded(run: MeetingMinutesRun, userId: string): Promise<void> {
+    const text = "保存先変更は実行しませんでした。古いボタンのため、現在の議事録・タスクは変更していません。";
+    const blocks: Array<Record<string, unknown>> = [
+      { type: "section", text: { type: "mrkdwn", text } },
+    ];
+    if (run.status === "completed" && run.destination && run.github && run.slack?.processingTs) {
+      blocks.push({ type: "section", text: { type: "mrkdwn",
+        text: `現在の保存先: ${escapeUntrustedSlackMrkdwn(run.destination.name)}\n現在の議事録の保存先を変更する場合は、以下の内容を確認してください。` } });
+      blocks.push(...redoConfirmationMessage(run.runId, run.file.name, run.revision ?? 0, run.sourceThreadTs).blocks);
+    } else {
+      blocks.push({ type: "section", text: { type: "mrkdwn", text: "このスレッドの最新の案内を確認してください。" } });
+    }
+    await this.post("chat.postEphemeral", { channel: run.sourceChannelId, thread_ts: run.sourceThreadTs,
+      user: userId, text, blocks });
+  }
   async showRedoFailure(run: MeetingMinutesRun): Promise<void> {
     if (!run.slack?.processingTs) throw new Error("meeting_minutes_status_coordinates_missing");
     const message = redoFailedMessage(run.runId, run.file.name, run.redo?.failure, run.revision ?? 0);
