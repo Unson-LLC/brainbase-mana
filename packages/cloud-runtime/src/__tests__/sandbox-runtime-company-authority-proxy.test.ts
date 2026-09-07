@@ -116,6 +116,22 @@ describe("Company Authority sandbox proxy guard", () => {
     );
   });
 
+  it.each(["tenant_boundary", "credential_config"])("logs the fixed %s rejection without error content", async (phase) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      if (phase === "tenant_boundary") proxyMocks.resolve.mockResolvedValue(new Response("private body", { status: 503 }));
+      else {
+        proxyMocks.resolve.mockResolvedValue(resolvedWithCompanyAuthority);
+        proxyMocks.credentialFetchForResolvedContext.mockImplementation(() => { throw new Error("secret config"); });
+      }
+      const response = await TechKnightSandbox.outboundByHost![BRAINBASE_MCP_PROXY_HOST](
+        request(BRAINBASE_MCP_PROXY_HOST), env(), outboundContext);
+      expect(response.status).toBe(503);
+      expect(log).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ event: "brainbase_mcp_boundary_rejected", phase, status: 503 }));
+      expect(proxyMocks.handleBrainbaseMcpProxyRequest).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+
   it.each(["search_personal_kg", "register_personal_kg"])("wires only %s through the owner-authority gateway", async (tool) => {
     proxyMocks.resolve.mockResolvedValue(resolvedWithCompanyAuthority);
     const response = await TechKnightSandbox.outboundByHost![RUNTIME_GATEWAY_PROXY_HOST](new Request(

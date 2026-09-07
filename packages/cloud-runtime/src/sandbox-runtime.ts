@@ -89,8 +89,13 @@ async function authorizeTenantRuntimeProxy(
     boundaries,
     now,
   );
-  if (resolved instanceof Response) return resolved;
   const host = new URL(request.url).hostname;
+  if (resolved instanceof Response) {
+    if (host === BRAINBASE_MCP_PROXY_HOST) console.log(JSON.stringify({
+      event: "brainbase_mcp_boundary_rejected", phase: "tenant_boundary", status: resolved.status,
+    }));
+    return resolved;
+  }
   if (resolved.company_authority_envelope !== undefined
     && host !== BRAINBASE_MCP_PROXY_HOST
     && host !== TASK_WRITE_PROXY_HOST
@@ -102,6 +107,9 @@ async function authorizeTenantRuntimeProxy(
   try {
     credentialFetch = tenantCredentialFetchForResolvedContext(env, resolved);
   } catch {
+    if (host === BRAINBASE_MCP_PROXY_HOST) console.log(JSON.stringify({
+      event: "brainbase_mcp_boundary_rejected", phase: "credential_config", status: 503,
+    }));
     return Response.json({ boundary: "credential_lease", error: "CONFIGURATION_INVALID" }, { status: 503 });
   }
   const headers = new Headers(request.headers);
