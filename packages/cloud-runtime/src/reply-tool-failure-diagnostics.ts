@@ -53,7 +53,7 @@ export function replyToolFailureDiagnostics(stdout: string) {
     const failureCategory = permissionDenialToolMatch ? "pretool_denied"
       : /\b(?:input validation|invalid arguments|SCHEMA_INVALID)\b/i.test(content) ? "input_validation"
       : /\b(?:timeout|timed out|TimeoutError)\b/i.test(content) ? "transport_timeout"
-      : httpMatch ? "transport_http_error" : "unknown";
+      : httpMatch && Number(httpMatch[1]) >= 400 ? "transport_http_error" : "unknown";
     failures.push({ toolName, isError: true as const, errorCodes, permissionDenialToolMatch, failureCategory,
       ...(httpMatch ? { httpStatus: Number(httpMatch[1]) } : {}) });
     if (failures.length === 8) break;

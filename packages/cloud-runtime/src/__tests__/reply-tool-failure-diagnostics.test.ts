@@ -26,6 +26,7 @@ it.each([
   ["Request timed out private content", "transport_timeout", undefined],
   ["HTTP error! status: 503 private content", "transport_http_error", 503],
   ["HTTP 502 private content", "transport_http_error", 502],
+  ["HTTP 200 private content", "unknown", 200],
   ["private identifier 503", "unknown", undefined],
 ])("classifies fixed failure metadata", (content, failureCategory, httpStatus) => {
   const result = replyToolFailureDiagnostics(stream([
