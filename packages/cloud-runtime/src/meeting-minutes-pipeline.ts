@@ -59,6 +59,7 @@ export interface RedoMeetingMinutesOptions {
   retractSharedMinutes(destination: MeetingMinutesDestination, parentTs: string, fileName: string): Promise<void>;
   showDestinationSelection(run: MeetingMinutesRun, destinations: readonly MeetingMinutesDestination[]): Promise<string>;
   showRedoFailure?(run: MeetingMinutesRun): Promise<void>;
+  showRedoSuperseded?(run: MeetingMinutesRun, command: MeetingMinutesRedo): Promise<void>;
 }
 
 function now(options: { now?: () => Date }): string { return (options.now?.() ?? new Date()).toISOString(); }
@@ -416,6 +417,7 @@ export async function redoMeetingMinutesRun(fs: WorkspaceFs, command: MeetingMin
     // its result onto the current generation's status message.
     console.info(JSON.stringify({ event: "meeting_minutes_redo_superseded", runId: run.runId,
       requestedRevision, currentRevision: persistedRevision }));
+    await options.showRedoSuperseded?.(run, command);
     return run;
   }
   if (run.status !== "completed" || !run.destination || !run.github || !run.slack?.processingTs) {

@@ -326,6 +326,8 @@ export interface MeetingMinutesRun {
   };
   /** Increments after each completed-run redo so external idempotency keys remain unique. */
   revision?: number;
+  /** Increments only when an already completed receipt is corrected (for example, its OutcomeCase link). */
+  receiptRevision?: number;
   /** Durable checkpoints for a completed-run redo. Each external cleanup is performed at most once per revision. */
   redo?: {
     revision: number;

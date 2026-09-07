@@ -5,6 +5,30 @@ import { meetingMinutesTaskActionFailure, type MeetingMinutesRun } from "../meet
 import { deriveCorrelationId } from "../multitenancy/ids.js";
 
 describe("MeetingMinutesSlackClient", () => {
+  it("offers a fresh confirmation for a stale button without modifying the current status", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true })));
+    const run: MeetingMinutesRun = routedRun();
+    run.status = "completed";
+    run.revision = 1;
+    await new MeetingMinutesSlackClient("token", fetchImpl).showRedoSuperseded(run, "U1");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toContain("chat.postEphemeral");
+    const body = JSON.parse(init.body);
+    expect(body).toMatchObject({ user: "U1", channel: run.sourceChannelId, thread_ts: run.sourceThreadTs });
+    expect(body.text).toContain("実行しませんでした");
+    const action = body.blocks.find((block: { type: string }) => block.type === "actions").elements[0];
+    expect(JSON.parse(action.value)).toMatchObject({ runId: run.runId, revision: 1, sourceThreadTs: run.sourceThreadTs });
+  });
+
+  it("does not offer destructive confirmation while the current run is unfinished", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true })));
+    const run: MeetingMinutesRun = routedRun(); run.status = "awaiting_destination";
+    await new MeetingMinutesSlackClient("token", fetchImpl).showRedoSuperseded(run, "U1");
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.blocks.some((block: { type: string }) => block.type === "actions")).toBe(false);
+  });
+
   it("shows a pending selection without offering another button or claiming generation started", () => {
     const message = destinationSelectedMessage("run-42", "meeting.txt", {
       id: "board", name: "定例会議",

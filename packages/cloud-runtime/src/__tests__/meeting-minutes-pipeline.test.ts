@@ -1134,17 +1134,18 @@ describe("meeting minutes pipeline", () => {
 
     const currentRun = await loadMeetingMinutesRun(fs, selection.runId);
     const deleteGitHub = vi.fn(); const deleteTask = vi.fn(); const retractSharedMinutes = vi.fn();
-    const showDestinationSelection = vi.fn();
+    const showDestinationSelection = vi.fn(); const showRedoSuperseded = vi.fn();
     await expect(redoMeetingMinutesRun(fs, { ...redo, revision: 0 }, { destinations: [destination],
-      deleteGitHub, deleteTask, retractSharedMinutes, showDestinationSelection }))
+      deleteGitHub, deleteTask, retractSharedMinutes, showDestinationSelection, showRedoSuperseded }))
       .resolves.toEqual(currentRun);
 
+    expect(showRedoSuperseded).toHaveBeenCalledWith(currentRun, { ...redo, revision: 0 });
     expect(deleteGitHub).not.toHaveBeenCalled();
     expect(deleteTask).not.toHaveBeenCalled();
     expect(retractSharedMinutes).not.toHaveBeenCalled();
     expect(showDestinationSelection).not.toHaveBeenCalled();
     await expect(redoMeetingMinutesRun(fs, redo, { destinations: [destination],
-      deleteGitHub, deleteTask, retractSharedMinutes, showDestinationSelection }))
+      deleteGitHub, deleteTask, retractSharedMinutes, showDestinationSelection, showRedoSuperseded }))
       .resolves.toEqual(currentRun);
     expect(await loadMeetingMinutesRun(fs, selection.runId)).toMatchObject({ status: "completed", revision: 1,
       github: { minutesPath: "docs/minutes/a.md" }, taskRegistration: { registered: [{ taskId: "task-1" }] } });
