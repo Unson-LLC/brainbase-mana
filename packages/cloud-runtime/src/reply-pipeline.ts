@@ -53,8 +53,9 @@ const SLACK_REACTION_TIMEOUT_MS = 5_000;
 // A complete judgment turn may need a second Stop-hook pass after Brainbase
 // repairs missing audit lines. Each exec consumes the same signed tenant
 // boundary, so calculate its timeout from the remaining deadline rather than
-// granting every attempt a fresh five-minute lease.
-const REPLY_SANDBOX_MAX_TIMEOUT_MS = 270_000;
+// granting every attempt a fresh lease. The nine-minute process ceiling leaves
+// one minute within the ten-minute requested-action capability window.
+const REPLY_SANDBOX_MAX_TIMEOUT_MS = 540_000;
 const REPLY_TENANT_BOUNDARY_SAFETY_MARGIN_MS = 30_000;
 const REPLY_AUDIT_FAILURE_CODE = "reply_judgment_tool_audit_mismatch_posttool_receipt_binding_missing";
 const REPLY_FAILURE_NOTICE_TEXT = "処理結果の確認でエラーが起きました。依頼された操作が完了したかは、まだ確認できていません。";

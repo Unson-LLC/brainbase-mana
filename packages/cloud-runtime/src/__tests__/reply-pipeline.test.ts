@@ -300,7 +300,7 @@ describe("TechKnight Slack reply pipeline", () => {
       expect.objectContaining({
         processId: expect.stringMatching(/^reply-[0-9a-f-]{36}$/),
         autoCleanup: false,
-        timeout: 270_000,
+        timeout: 540_000,
       }),
     );
     expect(getStatus).toHaveBeenCalledTimes(2);
@@ -342,7 +342,7 @@ describe("TechKnight Slack reply pipeline", () => {
 
     expect(startProcess).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ timeout: 270_000 }),
+      expect.objectContaining({ timeout: 540_000 }),
     );
   });
 
@@ -375,7 +375,7 @@ describe("TechKnight Slack reply pipeline", () => {
 
     expect(startProcess).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ timeout: 270_000 }),
+      expect.objectContaining({ timeout: 540_000 }),
     );
     expect(kill).not.toHaveBeenCalled();
   });
