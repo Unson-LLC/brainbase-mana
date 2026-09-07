@@ -98,7 +98,7 @@ describe("Cloudflare task runtime entrypoints", () => {
       requestId: "Ev123", workspace: "T0882T8N9UH", placementId: "mana-accounting", now: 1_001,
     });
     expect(claims).toMatchObject({ actor: { id: "U_REQUESTER", personId: "per_requester" },
-      projects: ["back-office"], budget: 3, nonce: "Ev123" });
+      projects: ["back-office"], budget: 3, nonce: "Ev123", expiresAt: 601_000 });
   });
 
   it("issues a requester capability for a gateway-only personal KG placement", async () => {

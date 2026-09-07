@@ -133,7 +133,10 @@ export async function issueTaskWriteRequestContext(
       placementId,
       projects,
       operations: ["task.create", "task.update", "task.transition"],
-      expiresAt: now + 180_000,
+      // A Slack turn can spend several minutes in model and resolver calls before
+      // it reaches the gateway. Keep the request-scoped capability valid for the
+      // full runtime window so a queued tool call does not expire mid-turn.
+      expiresAt: now + 600_000,
       nonce: event.eventId,
       budget: 3,
     }, env.TASK_WRITE_CAPABILITY_SECRET),
