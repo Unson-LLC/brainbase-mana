@@ -1261,7 +1261,7 @@ describe("Brainbase judgment Hook forwarder", () => {
         }] },
       },
       {
-        type: "user",
+        type: "user", toolUseResult: "recorded",
         message: { content: [{
           type: "tool_result", tool_use_id: "state-record-1",
           content: [{ type: "text", text: "recorded" }],
