@@ -495,6 +495,9 @@ function transcriptToolResponse(resultBlock, record) {
     if (record.toolUseResult && typeof record.toolUseResult === "object") {
       return record.toolUseResult;
     }
+    if (typeof record.toolUseResult === "string") {
+      return { content: [{ type: "text", text: record.toolUseResult }] };
+    }
     throw new Error("judgment_hook_transcript_tool_response_invalid");
   }
   if (!Object.hasOwn(resultBlock, "content")) {
