@@ -3013,7 +3013,7 @@ function executeSharedReplyRuntime(input: SharedReplyRuntimeInput): Promise<Repl
       }
       const graphOptions = {
         baseUrl: env.BRAINBASE_GRAPH_API_BASE_URL ?? env.BRAINBASE_TASK_API_BASE_URL,
-        token: env.BRAINBASE_GRAPH_API_TOKEN,
+        fetch: tenantCredentialFetch,
       };
       const mappedActor = await actorIdentityResolver?.(event);
       const requesterResolution = canonicalPersonId !== undefined

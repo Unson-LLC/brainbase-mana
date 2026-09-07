@@ -731,7 +731,7 @@ describe("Company Authority runtime.execute reply executor", () => {
       "mana",
       {
         baseUrl: "https://graph.example.com/",
-        token: "graph-service-token",
+        fetch: expect.any(Function),
       },
     );
   });
