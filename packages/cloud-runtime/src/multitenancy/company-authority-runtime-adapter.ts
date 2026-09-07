@@ -331,9 +331,8 @@ export function createObservedExecutionRequest(
   return request;
 }
 
-async function resolveAcceptedCompanyAuthority(input: {
-  observation: AuthenticatedSlackObservation;
-  desired_effect_by_capability: Readonly<Record<string, CompanyAuthorityDesiredEffect>>;
+async function resolveAcceptedCompanyAuthorityRequest(input: {
+  request: ObservedExecutionRequestV1;
   client: CompanyAuthorityClient;
   acceptance: CompanyAuthorityAcceptanceOptions;
 }): Promise<{
@@ -341,7 +340,8 @@ async function resolveAcceptedCompanyAuthority(input: {
   response: unknown;
   context: AcceptedCompanyAuthorityContext;
 }> {
-  const request = createObservedExecutionRequest(input.observation, input.desired_effect_by_capability);
+  const request = structuredClone(input.request);
+  validateObservedExecutionRequest(request);
   let resolution: CompanyAuthorityResolution;
   try {
     resolution = await input.client.resolve(request);
@@ -392,6 +392,28 @@ async function resolveAcceptedCompanyAuthority(input: {
     response: structuredClone(resolution.response),
     context: structuredClone(accepted.context),
   };
+}
+
+async function resolveAcceptedCompanyAuthority(input: {
+  observation: AuthenticatedSlackObservation;
+  desired_effect_by_capability: Readonly<Record<string, CompanyAuthorityDesiredEffect>>;
+  client: CompanyAuthorityClient;
+  acceptance: CompanyAuthorityAcceptanceOptions;
+}) {
+  return resolveAcceptedCompanyAuthorityRequest({
+    request: createObservedExecutionRequest(input.observation, input.desired_effect_by_capability),
+    client: input.client,
+    acceptance: input.acceptance,
+  });
+}
+
+export async function reissueCompanyAuthorityTenantContext(input: {
+  request: ObservedExecutionRequestV1;
+  client: CompanyAuthorityClient;
+  acceptance: CompanyAuthorityAcceptanceOptions;
+}): Promise<TenantContextEnvelope> {
+  const accepted = await resolveAcceptedCompanyAuthorityRequest(input);
+  return structuredClone(accepted.context.tenant_context) as unknown as TenantContextEnvelope;
 }
 
 interface AcceptedCompanyAuthorityRuntimeEnvelope<T> {

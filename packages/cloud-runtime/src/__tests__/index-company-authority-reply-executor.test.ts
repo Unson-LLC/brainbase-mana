@@ -8,6 +8,7 @@ const runtimeMocks = vi.hoisted(() => ({
   createCredentialFetch: vi.fn(),
   trustedForwarder: vi.fn(),
   executeBoundary: vi.fn(),
+  reissueCompanyAuthorityTenantContext: vi.fn(),
   executeTenantBoundary: vi.fn(),
   resolveSlackWorkerIngress: vi.fn(),
   executeContainer: vi.fn(),
@@ -70,7 +71,11 @@ vi.mock("../multitenancy/http-clients.js", async (importOriginal) => {
 });
 vi.mock("../multitenancy/company-authority-runtime-adapter.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../multitenancy/company-authority-runtime-adapter.js")>();
-  return { ...actual, executeCompanyAuthorityRuntimeBoundary: runtimeMocks.executeBoundary };
+  return {
+    ...actual,
+    executeCompanyAuthorityRuntimeBoundary: runtimeMocks.executeBoundary,
+    reissueCompanyAuthorityTenantContext: runtimeMocks.reissueCompanyAuthorityTenantContext,
+  };
 });
 vi.mock("../multitenancy/runtime-boundaries.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../multitenancy/runtime-boundaries.js")>();
@@ -494,6 +499,9 @@ describe("Company Authority runtime.execute reply executor", () => {
     runtimeMocks.executeBoundary.mockImplementation(async (input: { execute_auto: () => Promise<unknown> }) => ({
       result: await input.execute_auto(),
     }));
+    runtimeMocks.reissueCompanyAuthorityTenantContext.mockImplementation(async ({ request }: {
+      request: { tenant_context: unknown };
+    }) => request.tenant_context);
     runtimeMocks.executeTenantBoundary.mockImplementation(async (input: {
       boundary: string;
       tenant_context: Record<string, unknown>;
@@ -658,6 +666,7 @@ describe("Company Authority runtime.execute reply executor", () => {
       tenant_context: refreshedContext,
       authoritative_snapshot: snapshot,
     });
+    runtimeMocks.reissueCompanyAuthorityTenantContext.mockResolvedValue(refreshedContext);
     runtimeMocks.executeContainer.mockImplementationOnce(async (input: Record<string, unknown>) => {
       runtimeMocks.containerInputs.push(input);
       await (input.refresh as { issue(): Promise<unknown> }).issue();

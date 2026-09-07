@@ -32,7 +32,11 @@ import {
   executeCompanyAuthorityRuntimeBoundary,
   isCompanyAuthorityRuntimeEnvelopeCandidate,
   isCompanyAuthorityRuntimeEnvelope,
+  reissueCompanyAuthorityTenantContext,
   type CompanyAuthorityRuntimeEnvelope,
+  type CompanyAuthorityAcceptanceOptions,
+  type CompanyAuthorityClient,
+  type ObservedExecutionRequestV1,
 } from "./multitenancy/company-authority-runtime-adapter.js";
 import {
   companyAuthorityIngressConfiguration,
@@ -973,6 +977,11 @@ async function reissueLongRunningTenantContext(
   authorizationDesiredEffect?: CompanyAuthorityDesiredEffect,
   authorityBinding?: { resource_ref: string; project_hint?: string },
   authorityCapabilityId?: string,
+  companyAuthorityRefresh?: {
+    request: ObservedExecutionRequestV1;
+    client: CompanyAuthorityClient;
+    acceptance: CompanyAuthorityAcceptanceOptions;
+  },
 ): Promise<TenantContextEnvelope> {
   const projectIds = [...(expectedScope.project_ids ?? accepted.authorization.project_ids)];
   if (projectIds.length === 0 || !projectIds.includes(expectedScope.project_id)
@@ -992,7 +1001,9 @@ async function reissueLongRunningTenantContext(
     authority_resource_ref: authorityBinding?.resource_ref ?? null,
     authority_project_hint: authorityBinding?.project_hint ?? null,
   }));
-  const fresh = (await resolveSlackWorkerIngress({
+  const fresh = companyAuthorityRefresh
+    ? await reissueCompanyAuthorityTenantContext(companyAuthorityRefresh)
+    : (await resolveSlackWorkerIngress({
     identity: {
       provider: "slack",
       app_id: accepted.workspace_connection.app_id,
@@ -1020,7 +1031,7 @@ async function reissueLongRunningTenantContext(
     authority: clients.authority,
     now: new Date().toISOString(),
     resolve_verification_key: (keyId) => resolveTenantVerificationKey(env, keyId),
-  })).tenant_context;
+    })).tenant_context;
   const sameProjects = [...fresh.authorization.project_ids].sort().join("\0") ===
     [...projectIds].sort().join("\0");
   if (fresh.tenant.tenant_id !== accepted.tenant.tenant_id ||
@@ -2553,6 +2564,14 @@ export async function executeCompanyAuthorityReplyOperation(
                   env,
                   activeTenantContext,
                   expectedScope,
+                  undefined,
+                  undefined,
+                  undefined,
+                  {
+                    request: request,
+                    client: activeRuntimeClients.company_authority,
+                    acceptance: { ...config.acceptance, now: now() },
+                  },
                 );
                 activeTenantContext = fresh;
                 activeRuntimeClients = tenantRuntimeClients(env, fresh,
