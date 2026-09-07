@@ -314,7 +314,15 @@ export function createRuntimeGatewayProxyHandler(
         } catch {
           return responseError("gateway_upstream_failed", 502);
         }
-        if (!upstream.ok) return responseError("gateway_upstream_failed", 502);
+        if (!upstream.ok) {
+          console.error(JSON.stringify({
+            event: "personal_knowledge_upstream_rejected",
+            request_id: body.request_id,
+            tool,
+            status: upstream.status,
+          }));
+          return responseError("gateway_upstream_failed", 502);
+        }
         let result: unknown;
         try {
           result = await upstream.json();
