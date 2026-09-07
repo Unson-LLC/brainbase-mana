@@ -3071,7 +3071,10 @@ function executeSharedReplyRuntime(input: SharedReplyRuntimeInput): Promise<Repl
       tenantBoundaryExpiresAt,
       tenantBoundaryExpiresAtNow,
       claudeRuntime,
-      brainbaseProjectCode: placementProjectCode,
+      // Brainbase MCP authorizes canonical project IDs from the accepted
+      // Company Authority token. Keep the placement code for Task/Graph APIs,
+      // but give judgment and knowledge tools the canonical scoped project.
+      brainbaseProjectCode: input.canonicalProjectId ?? placementProjectCode,
       runtimeContext: placement.runtimeContext
         ? { ...placement.runtimeContext, escalationEmployee: placement.agent?.escalationEmployee }
         : undefined,
