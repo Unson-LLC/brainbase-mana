@@ -2553,14 +2553,6 @@ export async function executeCompanyAuthorityReplyOperation(
                   env,
                   activeTenantContext,
                   expectedScope,
-                  request.requested_action.desired_effect,
-                  {
-                    resource_ref: request.requested_action.resource_ref,
-                    ...(request.requested_action.project_hint
-                      ? { project_hint: request.requested_action.project_hint }
-                      : {}),
-                  },
-                  request.requested_action.capability_id,
                 );
                 activeTenantContext = fresh;
                 activeRuntimeClients = tenantRuntimeClients(env, fresh,
