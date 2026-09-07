@@ -159,12 +159,15 @@ TechKnightSandbox.outboundByHost = {
             credentialFetch,
             resolved.company_authority_envelope !== undefined
               ? {
-                  allowedTools: [
+                allowedTools: [
                     "brainbase_resolve_turn",
                     "brainbase_judgment_state_record",
-                    "brainbase_knowledge_resolve",
-                  ],
-                }
+                  "brainbase_knowledge_resolve",
+                ],
+                companyAuthorityResponse: (
+                  resolved.company_authority_envelope as { company_authority_response: unknown }
+                ).company_authority_response,
+              }
               : undefined,
           ),
       ),
