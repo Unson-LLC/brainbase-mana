@@ -40,6 +40,7 @@ export interface AuthorizedTenantBoundaryContext {
 
 interface BoundaryContext extends AuthorizedTenantBoundaryContext {
   expires_at: string;
+  company_authority_validated_at_registration?: boolean;
 }
 
 interface BoundaryValidationInput {
@@ -237,14 +238,14 @@ export class TenantBoundaryContextHandler {
           tenant_context: fresh,
           expected_scope: current.expected_scope,
           now: input.now,
-          ...(current.company_authority_envelope !== undefined
-            ? { company_authority_envelope: structuredClone(current.company_authority_envelope) }
-            : {}),
         });
         await this.storage.put(CONTEXT_KEY, {
           ...current,
           tenant_context: fresh,
           expires_at: fresh.expires_at,
+          ...(current.company_authority_envelope !== undefined
+            ? { company_authority_validated_at_registration: true }
+            : {}),
         } satisfies BoundaryContext);
         await this.storage.setAlarm?.(Date.parse(fresh.expires_at));
         return new Response(null, { status: 204 });
@@ -276,6 +277,7 @@ export class TenantBoundaryContextHandler {
             expected_scope: context.expected_scope,
             now: input.now,
             ...(context.company_authority_envelope !== undefined
+              && context.company_authority_validated_at_registration !== true
               ? { company_authority_envelope: structuredClone(context.company_authority_envelope) }
               : {}),
           });
