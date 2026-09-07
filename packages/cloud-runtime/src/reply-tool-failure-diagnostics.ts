@@ -16,9 +16,16 @@ const record = (v: unknown): RecordValue | undefined =>
 /** Only fixed tool names and known codes leave the private Claude stream. */
 export function replyToolFailureDiagnostics(stdout: string) {
   const blocks: RecordValue[] = [];
+  const denials: RecordValue[] = [];
   for (const line of stdout.split("\n")) {
     try {
       const event = record(JSON.parse(line));
+      if (event?.type === "result" && Array.isArray(event.permission_denials)) {
+        for (const raw of event.permission_denials) {
+          const denial = record(raw);
+          if (denial) denials.push(denial);
+        }
+      }
       const content = record(event?.message)?.content;
       if (Array.isArray(content)) {
         for (const value of content) { const block = record(value); if (block) blocks.push(block); }
@@ -38,7 +45,15 @@ export function replyToolFailureDiagnostics(stdout: string) {
     if (!toolName) continue;
     const content = JSON.stringify(block.content ?? null);
     const errorCodes = CODES.filter((code) => new RegExp(`(?<![A-Za-z0-9_])${code}(?![A-Za-z0-9_])`, "u").test(content));
-    failures.push({ toolName, isError: true as const, errorCodes });
+    const permissionDenialToolMatch = denials.some((denial) =>
+      denial.tool_use_id === block.tool_use_id && denial.tool_name === toolName);
+    const httpMatch = content.match(/\b(?:HTTP(?: error!? status)?|status(?: code)?)\s*[:=]?\s*([1-5][0-9]{2})\b/i);
+    const failureCategory = permissionDenialToolMatch ? "pretool_denied"
+      : /\b(?:input validation|invalid arguments|SCHEMA_INVALID)\b/i.test(content) ? "input_validation"
+      : /\b(?:timeout|timed out|TimeoutError)\b/i.test(content) ? "transport_timeout"
+      : httpMatch ? "transport_http_error" : "unknown";
+    failures.push({ toolName, isError: true as const, errorCodes, permissionDenialToolMatch, failureCategory,
+      ...(httpMatch ? { httpStatus: Number(httpMatch[1]) } : {}) });
     if (failures.length === 8) break;
   }
   return failures;

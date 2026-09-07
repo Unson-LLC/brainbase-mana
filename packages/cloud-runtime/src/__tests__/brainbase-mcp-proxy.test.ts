@@ -240,3 +240,27 @@ describe("Brainbase judgment Hook proxy", () => {
     expect((await handleBrainbaseMcpProxyRequest(new Request("https://brainbase-mcp.internal/health"), {})).status).toBe(403);
   });
 });
+
+
+describe("MCP failure boundary diagnostics", () => {
+  it.each(["policy", "config", "upstream_fetch"] as const)("records %s without request content", async (phase) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const toolName = phase === "policy" ? "private_tool_secret" : "brainbase_resolve_turn";
+      const forward = vi.fn(async () => { throw new Error("Bearer secret transport detail"); });
+      await handleBrainbaseMcpProxyRequest(new Request("https://brainbase-mcp.internal/mcp", {
+        method: "POST", body: JSON.stringify({ jsonrpc: "2.0", method: "tools/call",
+          params: { name: toolName, arguments: { request: "private user content" } } }),
+      }), phase === "config" ? {} : { BRAINBASE_MCP_BASE_URL: "https://example.test" },
+      forward, { allowedTools: ["brainbase_resolve_turn"] });
+      const entries = log.mock.calls.map(([line]) => JSON.parse(String(line)));
+      expect(entries).toEqual([
+        { event: "brainbase_mcp_proxy_phase", toolName: phase === "policy" ? "other" : toolName, phase: "received" },
+        { event: "brainbase_mcp_proxy_phase", toolName: phase === "policy" ? "other" : toolName, phase,
+          status: { policy: 403, config: 503, upstream_fetch: 502 }[phase] },
+      ]);
+      expect(JSON.stringify(entries)).not.toMatch(/secret|private user content/);
+      expect(forward).toHaveBeenCalledTimes(phase === "upstream_fetch" ? 1 : 0);
+    } finally { log.mockRestore(); }
+  });
+});

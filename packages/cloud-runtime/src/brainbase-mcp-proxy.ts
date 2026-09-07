@@ -83,6 +83,15 @@ export async function handleBrainbaseMcpProxyRequest(
   policy?: { allowedTools: readonly string[] },
 ): Promise<Response> {
   const url = new URL(request.url);
+  const toolName = await mcpToolName(request);
+  const diagnosticTool = ["brainbase_resolve_turn", "brainbase_judgment_state_record", "brainbase_knowledge_resolve"].includes(toolName ?? "")
+    ? toolName : "other";
+  const logPhase = (phase: "received" | "policy" | "config" | "upstream_fetch", status?: number) => {
+    if (!toolName) return;
+    console.log(JSON.stringify({ event: "brainbase_mcp_proxy_phase", toolName: diagnosticTool, phase,
+      ...(status === undefined ? {} : { status }) }));
+  };
+  logPhase("received");
   if (url.hostname === BRAINBASE_MCP_PROXY_HOST
       && url.pathname === BRAINBASE_MCP_PROXY_PATH
       && request.method === "GET") {
@@ -111,13 +120,16 @@ export async function handleBrainbaseMcpProxyRequest(
             && policy.allowedTools.includes(params.name));
       }
     } catch { /* Malformed/batch requests cannot bypass the operation gate. */ }
-    if (!allowed) return Response.json({
-      error: { code: "COMPANY_AUTHORITY_OPERATION_FORBIDDEN", retryable: false },
-    }, { status: 403 });
+    if (!allowed) {
+      logPhase("policy", 403);
+      return Response.json({
+        error: { code: "COMPANY_AUTHORITY_OPERATION_FORBIDDEN", retryable: false },
+      }, { status: 403 });
+    }
   }
-  const toolName = await mcpToolName(request);
   const method = await mcpMethod(request);
   if (!env.BRAINBASE_MCP_BASE_URL || (!env.BRAINBASE_MCP_TOKEN && !fetchImpl)) {
+    logPhase("config", 503);
     return Response.json({ error: { code: "BRAINBASE_PROXY_NOT_CONFIGURED", retryable: true } }, { status: 503 });
   }
   const headers = new Headers();
@@ -161,6 +173,7 @@ export async function handleBrainbaseMcpProxyRequest(
     }
     return new Response(response.body, { status: response.status, headers: allowedMcpResponseHeaders(response) });
   } catch {
+    logPhase("upstream_fetch", 502);
     return Response.json({ error: { code: "BRAINBASE_UPSTREAM_UNAVAILABLE", retryable: true } }, { status: 502 });
   }
 }
