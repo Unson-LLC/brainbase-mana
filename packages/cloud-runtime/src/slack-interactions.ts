@@ -78,6 +78,10 @@ export interface TenantInteractionEffects {
 export type SlackInteractionMessage = Omit<SlackSelectionMessage, "replace_original"> & {
   replace_original: boolean;
   response_type?: "ephemeral" | "in_channel";
+  /** Brokered private replies must name the source thread and clicking user. */
+  channel?: string;
+  thread_ts?: string;
+  user?: string;
 };
 
 /**
@@ -349,6 +353,12 @@ export async function updateSlackInteractionMessage(
 ): Promise<void> {
   const safeUrl = slackResponseUrl(responseUrl);
   if (!safeUrl) throw new Error("slack_response_url_invalid");
+  if (message.response_type === "ephemeral" && message.thread_ts) {
+    if (!message.channel || !message.user) throw new Error("slack_private_thread_coordinates_missing");
+    await new MeetingMinutesSlackClient(undefined, fetchImpl).postInteractionNotice(
+      message.channel, message.thread_ts, message.user, message);
+    return;
+  }
   const result = await fetchImpl(safeUrl, { method: "POST", redirect: "manual",
     headers: { "content-type": "application/json" }, body: JSON.stringify(message), signal: AbortSignal.timeout(1_500) });
   if (!result.ok) throw new Error(`slack_interaction_update_failed:${result.status}`);
@@ -508,6 +518,10 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     }
   }
 
+  // Redo must never fall back to a channel-level notice or an action timestamp.
+  if ((redoAction || confirmRedoAction) && !threadTsCandidates[0]) {
+    return response("slack_interaction_invalid", 400);
+  }
   const continueInteraction = async (): Promise<Response> => {
   let tenantEffects: TenantInteractionEffects;
   const tenantStartedAt = Date.now();
@@ -556,8 +570,15 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
       isTenantFailureResponseUrlEligible(error)) {
       const tenantFailureMessage = tenantInteractionFailedMessage(
         runId, string(actionValue?.fileName) ?? "議事録", failure);
+      // Without tenant credentials we cannot use chat.postEphemeral. The signed
+      // response_url can still publish a generic failure in the source thread;
+      // do not expose run, filename, or tenant details or alter the source status.
+      const redoFailureText = `保存先変更を開始できませんでした。時間をおいてもう一度操作してください。問い合わせID: ${correlationId}`;
       const notice = options.updateBeforeTenant(responseUrl,
-        redoAction || confirmRedoAction ? ephemeralRedoMessage(tenantFailureMessage) : tenantFailureMessage).catch(() => {
+        redoAction || confirmRedoAction
+          ? { replace_original: false, response_type: "in_channel", thread_ts: threadTsCandidates[0],
+            text: redoFailureText, blocks: [{ type: "section", text: { type: "plain_text", text: redoFailureText } }] }
+          : tenantFailureMessage).catch(() => {
           console.error(JSON.stringify({ event: "meeting_minutes_tenant_failure_projection_failed", runId,
             stage: "status_projection", code: "STATUS_PROJECTION_FAILED",
             correlation_id: deriveCorrelationId(runId, "status_projection", "STATUS_PROJECTION_FAILED"), retryable: true }));
@@ -566,6 +587,15 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     }
     return Response.json({ error: failure.code, message_key: failure.message_key,
       next_actions: failure.next_actions, correlation_id: failure.correlation_id }, { status: 503 });
+  }
+  // All authorized redo projections, including bounded error fallbacks, use
+  // the same private source-thread transport. Never overwrite durable run status.
+  if ((redoAction || confirmRedoAction) && options.updateOriginal) {
+    const updateOriginal = options.updateOriginal;
+    options = { ...options, updateOriginal: (url, message, credentialFetch) => updateOriginal(url,
+      { ...message, replace_original: false, response_type: "ephemeral",
+        channel: interactionChannelId, thread_ts: threadTsCandidates[0], user: interactionRequesterId },
+      credentialFetch) };
   }
   const value = actionValue;
   const runId = string(value?.runId);
@@ -584,11 +614,6 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
   const pendingEligible = organizationAction || backAction
     ? !!runId && !!fileName && !!responseUrl && !!options.updateOriginal && !!options.defer && !!destinations &&
       (!organizationAction || destinations.some((item) => item.organization.id === organizationId))
-    : redoAction
-    ? !!runId && !!fileName && !!responseUrl && !!options.updateOriginal && !!options.defer
-    : confirmRedoAction
-    ? !!runId && !!fileName && !!string(channel?.id) && !!sourceThreadTs && !!actionTs && !!responseUrl &&
-      !!options.updateOriginal && !!options.defer
     : destinationAction
     ? !!runId && !!destinationId && !!string(channel?.id) && !!actionTs && !!options.defer && !!selectedDestination
     : false;
@@ -596,10 +621,6 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     ? interactionPendingMessage(pendingFileName, "プロジェクト一覧を開いています")
     : backAction
     ? interactionPendingMessage(pendingFileName, "ワークスペース一覧を開いています")
-    : redoAction
-    ? ephemeralRedoMessage(interactionPendingMessage(pendingFileName, "保存先のやり直しを確認しています"))
-    : confirmRedoAction
-    ? ephemeralRedoMessage(interactionPendingMessage(pendingFileName, "やり直しの開始を確認しています"))
     : destinationAction && selectedDestination
     ? destinationSelectedMessage(pendingRunId, pendingFileName, selectedDestination)
     : undefined;
@@ -607,8 +628,6 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
   if (responseUrl && options.updateOriginal && pendingMessage) {
     const pendingKind = organizationAction ? "project_selection_pending"
       : backAction ? "organization_selection_pending"
-      : redoAction ? "redo_confirmation_pending"
-      : confirmRedoAction ? "redo_processing_pending"
       : "destination_confirmation";
     try {
       await guardedSlackEffect(tenantEffects, `${pendingKind}:${pendingRunId}:${revision}`,
@@ -962,7 +981,7 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     // tenant boundary below. Keep this independent of authority and queue waits.
     const receiptUrl = slackResponseUrl(payload?.response_url);
     const projectReceipt = options.updateBeforeTenant;
-    if (receiptUrl && projectReceipt && (!destinationAction || selectedDestination)) {
+    if (receiptUrl && projectReceipt && !redoAction && !confirmRedoAction && (!destinationAction || selectedDestination)) {
       const text = "操作を受け付けました。確認しています。";
       const receipt: SlackInteractionMessage = { replace_original: false, response_type: "ephemeral", text,
         blocks: [{ type: "section", text: { type: "plain_text", text } }] };
