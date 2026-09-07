@@ -37,13 +37,20 @@ const personalRequest = async (tool: string, args: Record<string, unknown>, toke
 describe("runtime gateway proxy", () => {
   it("resolves read authority and searches only the verified personal DM", async () => {
     const authority = { decision: "auto", company_authority_response: "signed-read" };
-    const resolveAuthority = vi.fn(async (input: { capability: string; effect: string; requestId: string }) => ({ ...authority, input }));
+    const resolveAuthority = vi.fn(async (input: { capability: string; effect: string; requestId: string }) => ({
+      companyAuthorityResponse: { ...authority, input }, ownerPersonId: "person-a", organizationId: "org-a",
+    }));
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(new URL(input instanceof Request ? input.url : String(input)).pathname).toBe("/api/personal-knowledge/search");
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      expect(url.pathname).toBe("/api/personal-knowledge/search");
+      expect(url.searchParams.get("query")).toBe("契約");
+      expect(url.searchParams.get("limit")).toBe("10");
+      expect(init?.method).toBe("GET");
       expect((init?.headers as Headers).get("authorization")).toBe("Bearer bb-token");
-      expect(JSON.parse(String(init?.body))).toEqual({
-        query: "契約", limit: 10, company_authority_response: { ...authority, input: { capability: "personal_read", effect: "read", requestId: "Ev1" } },
-      });
+      expect((init?.headers as Headers).get("x-brainbase-proxy-person-id")).toBe("person-a");
+      expect((init?.headers as Headers).get("x-brainbase-organization-id")).toBe("org-a");
+      expect((init?.headers as Headers).get("x-brainbase-access-reason")).toBe("mana_personal_kg:Ev1");
+      expect(init?.body).toBeUndefined();
       return Response.json([{ event_id: "event-a", body: "本人メモ" }]);
     });
     const response = await createRuntimeGatewayProxyHandler(fetchImpl as typeof fetch, {
@@ -58,7 +65,9 @@ describe("runtime gateway proxy", () => {
   });
 
   it("registers only persisted personal event fields with write authority", async () => {
-    const resolveAuthority = vi.fn(async (input: { capability: string; effect: string; requestId: string }) => ({ signed: input }));
+    const resolveAuthority = vi.fn(async (input: { capability: string; effect: string; requestId: string }) => ({
+      companyAuthorityResponse: { signed: input }, ownerPersonId: "person-a", organizationId: "org-a",
+    }));
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(JSON.parse(String(init?.body))).toEqual({
         body: "本人の判断", body_hash: "sha256:abc", event_id: "event-a", source: { kind: "slack" },
@@ -66,6 +75,8 @@ describe("runtime gateway proxy", () => {
         occurred_at: "2026-09-06T00:00:00.000Z", captured_at: "2026-09-06T00:00:01.000Z",
         company_authority_response: { signed: { capability: "personal_write", effect: "write", requestId: "Ev1" } },
       });
+      expect((init?.headers as Headers).get("x-brainbase-proxy-person-id")).toBe("person-a");
+      expect((init?.headers as Headers).get("x-brainbase-organization-id")).toBe("org-a");
       return Response.json({ event_id: "event-a", owner_person_id: "person-a", organization_id: "org-a", body_hash: "sha256:abc" });
     });
     const response = await createRuntimeGatewayProxyHandler(fetchImpl as typeof fetch, {
@@ -119,7 +130,7 @@ describe("runtime gateway proxy", () => {
   });
 
   it("does not turn an invalid or failed personal upstream response into an empty result", async () => {
-    const resolveAuthority = vi.fn(async () => ({ signed: true }));
+    const resolveAuthority = vi.fn(async () => ({ companyAuthorityResponse: { signed: true }, ownerPersonId: "person-a", organizationId: "org-a" }));
     const fetchImpl = vi.fn(async () => Response.json({ items: [] }, { status: 500 }));
     const response = await createRuntimeGatewayProxyHandler(fetchImpl as typeof fetch, {
       personalKnowledge: { tenantContext: personalTenantContext, resolveAuthority },

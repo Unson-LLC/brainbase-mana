@@ -42,7 +42,7 @@ export async function resolvePersonalKnowledgeAuthority(
   env: TenantProviderOutboundEnv & CompanyAuthorityRuntimeConfigEnv,
   resolved: AuthorizedTenantBoundaryContext,
   input: PersonalKnowledgeAuthorityInput,
-): Promise<unknown> {
+): Promise<{ companyAuthorityResponse: unknown; ownerPersonId: string; organizationId: string }> {
   const tenant = resolved.tenant_context;
   const deny = () => { throw new Error("personal_knowledge_authority_denied"); };
   if (!resolved.company_authority_envelope
@@ -98,7 +98,11 @@ export async function resolvePersonalKnowledgeAuthority(
     || context.scope.resource_ref !== resource
     || context.authority.capability_id !== input.capability
     || !Array.isArray(effects) || effects.length !== 1 || effects[0] !== input.effect) deny();
-  return result.envelope.company_authority_response;
+  return {
+    companyAuthorityResponse: result.envelope.company_authority_response,
+    ownerPersonId: String(context.actor.canonical_person_id),
+    organizationId: String(context.scope.organization_id),
+  };
 }
 
 export async function isPersonalKnowledgeGatewayRequest(request: Request): Promise<boolean> {
