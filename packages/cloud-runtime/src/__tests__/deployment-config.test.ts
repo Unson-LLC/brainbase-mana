@@ -268,7 +268,7 @@ describe("会社別Cloudflare deployment", () => {
         placementId: "unson-sato",
         channelId: "D0BPK9TFZU6",
         channelName: "sato-mana-dm",
-        projectCodes: ["brainbase"],
+        projectCodes: ["mana"],
         audience: { type: "operator", allowedUserIds: ["U088D1HBY6L"] },
         agent: { model: "sonnet", escalationEmployee: "critical-reviewer" },
         runtimeContext: {
@@ -587,7 +587,7 @@ describe("会社別Cloudflare deployment", () => {
       "biz-meeting-router": ["prj_01KGCS8C1PSSXPHXPBX1D4CKDT"],
       "minutes-ncom-catalyst": ["prj_01KGHVCMA6R6A9MEMGKHRXQ5J0"],
       "mana-dev-biz": ["prj_01KGHVCMA35JHSMXTSWQAS04PS"],
-      "unson-sato": ["prj_01KGCS8CAJKKDWACPNK1E5WX8H"],
+      "unson-sato": ["prj_01KGHVCMA35JHSMXTSWQAS04PS"],
     });
     const taskWritePolicy = JSON.parse(unson.vars.TASK_WRITE_POLICY_JSON) as {
       rules: Array<{ effect: string; placements: string[]; projects: string[] }>;
