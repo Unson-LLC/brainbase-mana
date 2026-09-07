@@ -982,6 +982,14 @@ async function reissueLongRunningTenantContext(
   const clients = tenantRuntimeClients(env, undefined, authorizationDesiredEffect
     ? { ...configuredDesiredEffects, [expectedScope.capability_id]: authorizationDesiredEffect }
     : configuredDesiredEffects);
+  console.log(JSON.stringify({
+    event: "company_authority_tenant_context_refresh_started",
+    correlation_id: accepted.correlation_id,
+    capability_id: expectedScope.capability_id,
+    desired_effect: authorizationDesiredEffect ?? null,
+    authority_resource_ref: authorityBinding?.resource_ref ?? null,
+    authority_project_hint: authorityBinding?.project_hint ?? null,
+  }));
   const fresh = (await resolveSlackWorkerIngress({
     identity: {
       provider: "slack",
