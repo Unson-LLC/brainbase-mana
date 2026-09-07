@@ -2,6 +2,29 @@ import { describe, expect, it, vi } from "vitest";
 import { handleBrainbaseMcpProxyRequest } from "../brainbase-mcp-proxy.js";
 
 describe("Brainbase judgment Hook proxy", () => {
+  it("forwards only the verified Company Authority response supplied by the durable boundary", async () => {
+    const authority = { schema_version: "1.0", actor: { canonical_person_id: "per_owner" } };
+    const forward = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const encoded = new Headers(init?.headers).get("x-brainbase-company-authority-response");
+      expect(encoded).toBeTruthy();
+      expect(JSON.parse(Buffer.from(encoded!, "base64url").toString("utf8"))).toEqual(authority);
+      return Response.json({ jsonrpc: "2.0", id: 1, result: {} });
+    }) as unknown as typeof fetch;
+    const response = await handleBrainbaseMcpProxyRequest(
+      new Request("https://brainbase-mcp.internal/mcp", {
+        method: "POST",
+        headers: { "x-brainbase-company-authority-response": "hostile-input" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+          name: "brainbase_resolve_turn", arguments: {},
+        } }),
+      }),
+      { BRAINBASE_MCP_BASE_URL: "https://bb.example.test" }, forward,
+      { allowedTools: ["brainbase_resolve_turn"], companyAuthorityResponse: authority },
+    );
+    expect(response.status).toBe(200);
+    expect(forward).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects the unsupported MCP notification stream without contacting upstream", async () => {
     const forward = vi.fn();
     const response = await handleBrainbaseMcpProxyRequest(

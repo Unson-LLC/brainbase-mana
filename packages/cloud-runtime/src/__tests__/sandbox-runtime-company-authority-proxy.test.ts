@@ -67,7 +67,9 @@ const resolvedWithCompanyAuthority = {
     workspace_connection: { workspace_id: "T-workspace" },
   },
   expected_scope: {},
-  company_authority_envelope: { decision: "auto" },
+  company_authority_envelope: {
+    company_authority_response: { schema_version: "1.0", authority: { decision: "auto" } },
+  },
 } as unknown as AuthorizedTenantBoundaryContext;
 
 const resolvedWithoutCompanyAuthority = {
@@ -187,6 +189,7 @@ describe("Company Authority sandbox proxy guard", () => {
           "brainbase_judgment_state_record",
           "brainbase_knowledge_resolve",
         ],
+        companyAuthorityResponse: { schema_version: "1.0", authority: { decision: "auto" } },
       },
     );
   });

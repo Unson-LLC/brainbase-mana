@@ -10,6 +10,23 @@ export interface BrainbaseMcpProxyEnv {
   BRAINBASE_JUDGMENT_AUTHORITY_PROJECTS_JSON?: string;
 }
 
+export interface BrainbaseMcpProxyPolicy {
+  allowedTools: readonly string[];
+  companyAuthorityResponse?: unknown;
+}
+
+const COMPANY_AUTHORITY_HEADER = "x-brainbase-company-authority-response";
+const MAX_COMPANY_AUTHORITY_HEADER_BYTES = 12 * 1024;
+
+function base64UrlEncodeUtf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
+}
+
 async function mcpToolName(request: Request): Promise<string | undefined> {
   if (new URL(request.url).pathname !== BRAINBASE_MCP_PROXY_PATH) return undefined;
   try {
@@ -80,7 +97,7 @@ export async function handleBrainbaseMcpProxyRequest(
   request: Request,
   env: BrainbaseMcpProxyEnv,
   fetchImpl?: typeof fetch,
-  policy?: { allowedTools: readonly string[] },
+  policy?: BrainbaseMcpProxyPolicy,
 ): Promise<Response> {
   const url = new URL(request.url);
   const toolName = await mcpToolName(request);
@@ -140,6 +157,15 @@ export async function handleBrainbaseMcpProxyRequest(
     if (value) headers.set(name, value);
   }
   if (env.BRAINBASE_MCP_TOKEN) headers.set("authorization", `Bearer ${env.BRAINBASE_MCP_TOKEN}`);
+  if (policy?.companyAuthorityResponse !== undefined) {
+    const encodedAuthority = base64UrlEncodeUtf8(JSON.stringify(policy.companyAuthorityResponse));
+    if (new TextEncoder().encode(encodedAuthority).byteLength > MAX_COMPANY_AUTHORITY_HEADER_BYTES) {
+      return Response.json({
+        error: { code: "COMPANY_AUTHORITY_RESPONSE_TOO_LARGE", retryable: false },
+      }, { status: 403 });
+    }
+    headers.set(COMPANY_AUTHORITY_HEADER, encodedAuthority);
+  }
   if (url.pathname === BRAINBASE_JUDGMENT_HOOK_PROXY_PATH) {
     const projectCode = env.BRAINBASE_JUDGMENT_PROJECT_CODE?.trim();
     if (!projectCode) {
