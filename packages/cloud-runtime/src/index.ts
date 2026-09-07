@@ -972,20 +972,22 @@ async function reissueLongRunningTenantContext(
   expectedScope: ExpectedTenantScope,
   authorizationDesiredEffect?: CompanyAuthorityDesiredEffect,
   authorityBinding?: { resource_ref: string; project_hint?: string },
+  authorityCapabilityId?: string,
 ): Promise<TenantContextEnvelope> {
   const projectIds = [...(expectedScope.project_ids ?? accepted.authorization.project_ids)];
   if (projectIds.length === 0 || !projectIds.includes(expectedScope.project_id)
     || accepted.slack.thread_ts !== expectedScope.thread_ts || !accepted.slack.requester_id) {
     deny("container_launch", "PROJECT_SCOPE_MISMATCH");
   }
+  const capabilityId = authorityCapabilityId ?? expectedScope.capability_id;
   const configuredDesiredEffects = tenantConfiguredDesiredEffectByCapability(env);
   const clients = tenantRuntimeClients(env, undefined, authorizationDesiredEffect
-    ? { ...configuredDesiredEffects, [expectedScope.capability_id]: authorizationDesiredEffect }
+    ? { ...configuredDesiredEffects, [capabilityId]: authorizationDesiredEffect }
     : configuredDesiredEffects);
   console.log(JSON.stringify({
     event: "company_authority_tenant_context_refresh_started",
     correlation_id: accepted.correlation_id,
-    capability_id: expectedScope.capability_id,
+    capability_id: capabilityId,
     desired_effect: authorizationDesiredEffect ?? null,
     authority_resource_ref: authorityBinding?.resource_ref ?? null,
     authority_project_hint: authorityBinding?.project_hint ?? null,
@@ -1005,7 +1007,7 @@ async function reissueLongRunningTenantContext(
     required_authorization: {
       audience: expectedScope.audience,
       project_id: expectedScope.project_id,
-      capability_id: expectedScope.capability_id,
+      capability_id: capabilityId,
     },
     trusted_project_ids: projectIds,
     ...(authorityBinding ? {
@@ -2558,6 +2560,7 @@ export async function executeCompanyAuthorityReplyOperation(
                       ? { project_hint: request.requested_action.project_hint }
                       : {}),
                   },
+                  request.requested_action.capability_id,
                 );
                 activeTenantContext = fresh;
                 activeRuntimeClients = tenantRuntimeClients(env, fresh,
