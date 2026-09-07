@@ -1,3 +1,4 @@
+import { replyToolFailureDiagnostics } from "./reply-tool-failure-diagnostics.js";
 import type { SlackQueueEvent } from "./types.js";
 import {
   isReplyCompleted,
@@ -659,6 +660,7 @@ export async function generateClaudeReply(
           const retryAuditDiagnostics = getReplyJudgmentAuditDiagnostics(retryError);
           emitTurnLog("error", "mana_claude_failed", event, trace, {
             outcome: "error", reasonCode: retryCode,
+            toolFailures: replyToolFailureDiagnostics(result.stdout),
             ...(retryAuditDiagnostics ? { auditDiagnostics: retryAuditDiagnostics } : {}),
             ...(result.stderr.trim()
               ? {
@@ -676,6 +678,7 @@ export async function generateClaudeReply(
         emitTurnLog("error", "mana_claude_failed", event, trace, {
           outcome: "error",
           reasonCode: code,
+          toolFailures: replyToolFailureDiagnostics(result.stdout),
           ...(auditDiagnostics ? { auditDiagnostics } : {}),
           ...(result.stderr.trim()
             ? {
