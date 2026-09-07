@@ -46,8 +46,30 @@ const tenantBoundary = {
 describe("handleMeetingMinutesInteraction", () => {
   function deferred() { const work: Promise<void>[] = []; return { work, defer: (promise: Promise<void>) => { work.push(promise); } }; }
   function expectEphemeral(message: unknown) {
-    expect(message).toMatchObject({ replace_original: false, response_type: "ephemeral" });
+    expect(message).toMatchObject({ replace_original: false, response_type: "ephemeral",
+      channel: "C1", thread_ts: "1.0", user: "U1" });
   }
+  it.each(["mana_meeting_minutes_redo", "mana_meeting_minutes_confirm_redo"])(
+    "rejects %s when the source thread is missing despite message and action timestamps", async (actionId) => {
+      const redoPayload = structuredClone(payload);
+      redoPayload.actions[0]!.action_id = actionId;
+      redoPayload.actions[0]!.value = JSON.stringify({ runId: "Ev1_F1", fileName: "meeting.txt" });
+      Reflect.deleteProperty(redoPayload.message, "thread_ts");
+      const resolveTenantEffects = vi.fn(tenantBoundary.resolveTenantEffects);
+      const updateBeforeTenant = vi.fn();
+      const updateOriginal = vi.fn();
+      const send = vi.fn();
+      const response = await handleMeetingMinutesInteraction(request(redoPayload), {
+        signingSecret: secret, expectedTeamId: "T1", expectedAppId: "A1", operatorUserIds: new Set(["U1"]),
+        nowMs: now * 1000, ...tenantBoundary, resolveTenantEffects, send, updateBeforeTenant, updateOriginal,
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "slack_interaction_invalid" });
+      expect(resolveTenantEffects).not.toHaveBeenCalled();
+      expect(updateBeforeTenant).not.toHaveBeenCalled();
+      expect(updateOriginal).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+    });
   it("acknowledges before remote authority resolves and retains authorization before effects", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -472,8 +494,9 @@ describe("handleMeetingMinutesInteraction", () => {
       destinations, send, updateOriginal, defer: background.defer });
     expect(response.status).toBe(200); await Promise.all(background.work);
     expect(send).not.toHaveBeenCalled();
-    expect(JSON.stringify(updateOriginal.mock.calls[1]?.[1])).toContain("GitHubの議事録・文字起こしと自動登録タスクを取り消し");
-    expect(JSON.stringify(updateOriginal.mock.calls[1]?.[1])).toContain("取り消して選び直す");
+    expect(updateOriginal).toHaveBeenCalledOnce();
+    expect(JSON.stringify(updateOriginal.mock.calls[0]?.[1])).toContain("GitHubの議事録・文字起こしと自動登録タスクを取り消し");
+    expect(JSON.stringify(updateOriginal.mock.calls[0]?.[1])).toContain("取り消して選び直す");
     expectEphemeral(updateOriginal.mock.calls[0]?.[1]);
   });
   it("forwards the displayed redo revision through confirmation and queueing", async () => {
@@ -517,14 +540,14 @@ describe("handleMeetingMinutesInteraction", () => {
     redoPayload.actions[0]!.action_id = "mana_meeting_minutes_redo";
     redoPayload.actions[0]!.value = JSON.stringify({ runId: "Ev1_F1", fileName: "meeting.txt" });
     const send = vi.fn();
-    const updateOriginal = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("confirmation projection unavailable"))
+    const updateOriginal = vi.fn().mockRejectedValueOnce(new Error("confirmation projection unavailable"))
       .mockResolvedValueOnce(undefined);
     const background = deferred();
     const response = await handleMeetingMinutesInteraction(request(redoPayload), { signingSecret: secret,
       expectedTeamId: "T1", expectedAppId: "A1", operatorUserIds: new Set(["U1"]), nowMs: now * 1000,
       ...tenantBoundary, destinations, send, updateOriginal, defer: background.defer });
     expect(response.status).toBe(200); await Promise.all(background.work);
-    expect(updateOriginal).toHaveBeenCalledTimes(3);
+    expect(updateOriginal).toHaveBeenCalledTimes(2);
     const fallback = JSON.stringify(updateOriginal.mock.calls.at(-1)?.[1]);
     expect(fallback).toContain("STATUS_PROJECTION_FAILED");
     expect(fallback).toContain("処理ID: Ev1_F1");
@@ -542,8 +565,9 @@ describe("handleMeetingMinutesInteraction", () => {
       expectedTeamId: "T1", expectedAppId: "A1", operatorUserIds: new Set(["U1"]), nowMs: now * 1000, ...tenantBoundary,
       destinations, send, updateOriginal, defer: background.defer });
     expect(response.status).toBe(200); await Promise.all(background.work);
-    expect(JSON.stringify(updateOriginal.mock.calls[1]?.[1])).toContain("保存先変更の要求を受け付けました");
-    expect(JSON.stringify(updateOriginal.mock.calls[1]?.[1])).toContain("古い操作の場合は現在の議事録・タスクを変更せず終了します");
+    expect(updateOriginal).toHaveBeenCalledOnce();
+    expect(JSON.stringify(updateOriginal.mock.calls[0]?.[1])).toContain("保存先変更の要求を受け付けました");
+    expect(JSON.stringify(updateOriginal.mock.calls[0]?.[1])).toContain("古い操作の場合は現在の議事録・タスクを変更せず終了します");
     expectEphemeral(updateOriginal.mock.calls[0]?.[1]);
     expect(send).toHaveBeenCalledWith({ kind: "meeting_minutes_redo", runId: "Ev1_F1", workspaceId: "T1", appId: "A1",
       channelId: "C1", threadTs: "1.0", userId: "U1", actionTs: "1.2", revision: 0 });
@@ -558,8 +582,8 @@ describe("handleMeetingMinutesInteraction", () => {
       expectedTeamId: "T1", expectedAppId: "A1", operatorUserIds: new Set(["U1"]), nowMs: now * 1000, ...tenantBoundary,
       destinations, send, updateOriginal, defer: background.defer });
     expect(response.status).toBe(200); await Promise.all(background.work);
-    expect(updateOriginal).toHaveBeenCalledTimes(3);
-    expect(JSON.stringify(updateOriginal.mock.calls[1]?.[1])).toContain("保存先変更の要求を受け付けました");
+    expect(updateOriginal).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(updateOriginal.mock.calls[0]?.[1])).toContain("保存先変更の要求を受け付けました");
     expect(JSON.stringify(updateOriginal.mock.calls.at(-1)?.[1])).toContain("取り消しを再実行");
     expectEphemeral(updateOriginal.mock.calls[0]?.[1]);
     expectEphemeral(updateOriginal.mock.calls[1]?.[1]);
@@ -623,14 +647,14 @@ describe("handleMeetingMinutesInteraction", () => {
     confirmPayload.actions[0]!.action_id = "mana_meeting_minutes_confirm_redo";
     confirmPayload.actions[0]!.value = JSON.stringify({ runId: "Ev1_F1", fileName: "meeting.txt" });
     const send = vi.fn().mockResolvedValue(undefined);
-    const updateOriginal = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("projection unavailable"))
+    const updateOriginal = vi.fn().mockRejectedValueOnce(new Error("projection unavailable"))
       .mockResolvedValueOnce(undefined);
     const background = deferred();
     const response = await handleMeetingMinutesInteraction(request(confirmPayload), { signingSecret: secret,
       expectedTeamId: "T1", expectedAppId: "A1", operatorUserIds: new Set(["U1"]), nowMs: now * 1000,
       ...tenantBoundary, destinations, send, updateOriginal, defer: background.defer });
     expect(response.status).toBe(200); await Promise.all(background.work);
-    expect(send).toHaveBeenCalledOnce(); expect(updateOriginal).toHaveBeenCalledTimes(3);
+    expect(send).toHaveBeenCalledOnce(); expect(updateOriginal).toHaveBeenCalledTimes(2);
     const fallback = JSON.stringify(updateOriginal.mock.calls.at(-1)?.[1]);
     expect(fallback).toContain("STATUS_PROJECTION_FAILED");
     expect(fallback).toContain("処理ID: Ev1_F1");
@@ -790,6 +814,36 @@ describe("handleMeetingMinutesInteraction", () => {
     expect(projected).toContain("問い合わせID: cor_");
     expect(projected).not.toContain("Bearer secret");
   });
+  it.each(["mana_meeting_minutes_redo", "mana_meeting_minutes_confirm_redo"])(
+    "keeps a %s tenant failure generic and in the source thread", async (actionId) => {
+      const redoPayload = structuredClone(payload);
+      redoPayload.actions[0]!.action_id = actionId;
+      redoPayload.actions[0]!.value = JSON.stringify({ runId: "Ev1_F1", fileName: "meeting.txt" });
+      const background = deferred();
+      const updateBeforeTenant = vi.fn().mockResolvedValue(undefined);
+      const updateOriginal = vi.fn();
+      const resolveTenantEffects = vi.fn(async () => {
+        throw new TenantBoundaryError("worker_ingress", "WORKSPACE_CONNECTION_REAUTH_REQUIRED", "Bearer secret");
+      });
+      const response = await handleMeetingMinutesInteraction(request(redoPayload), { signingSecret: secret,
+        expectedTeamId: "T1", expectedAppId: "A1", operatorUserIds: new Set(["U1"]), nowMs: now * 1000,
+        ...tenantBoundary, resolveTenantEffects, destinations, send: vi.fn(), updateBeforeTenant, updateOriginal,
+        defer: background.defer });
+      expect(response.status).toBe(503);
+      await Promise.all(background.work);
+      expect(updateBeforeTenant).toHaveBeenCalledOnce();
+      expect(updateOriginal).not.toHaveBeenCalled();
+      const projected = updateBeforeTenant.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(projected).toMatchObject({ replace_original: false, response_type: "in_channel", thread_ts: "1.0",
+        text: expect.stringContaining("保存先変更を開始できませんでした") });
+      expect(projected).not.toHaveProperty("channel");
+      expect(projected).not.toHaveProperty("user");
+      const serialized = JSON.stringify(projected);
+      expect(serialized).toContain("問い合わせID: cor_");
+      expect(serialized).not.toContain("Ev1_F1");
+      expect(serialized).not.toContain("meeting.txt");
+      expect(serialized).not.toContain("Bearer secret");
+    });
   it.each([
     ["INSTALLATION_REQUIRED", "installation_required", true],
     ["WORKSPACE_CONNECTION_UNINSTALLED", "installation_required", true],
@@ -926,6 +980,15 @@ describe("updateSlackInteractionMessage", () => {
     expect(fetchImpl).toHaveBeenCalledWith("https://hooks.slack.com/actions/T1/B1/token", expect.objectContaining({
       method: "POST", body: JSON.stringify(message),
     }));
+  });
+  it("rejects a failed Slack API response for private source-thread notices", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(Response.json({ ok: false, error: "not_allowed" }));
+    const message = { replace_original: false as const, response_type: "ephemeral" as const,
+      channel: "C1", thread_ts: "1.0", user: "U1", text: "再実行しています。", blocks: [] };
+    await expect(updateSlackInteractionMessage("https://hooks.slack.com/actions/T1/B1/token", message, fetchImpl))
+      .rejects.toThrow("slack_api_failed:chat.postEphemeral:not_allowed");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://slack.com/api/chat.postEphemeral");
   });
   it("rejects a non-Slack response URL before fetching", async () => {
     const fetchImpl = vi.fn();

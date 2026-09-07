@@ -285,9 +285,9 @@ describe("MeetingMinutesSlackClient", () => {
       call = { url: String(input), body: JSON.parse(String(init?.body)) };
       return Response.json({ ok: true });
     }) as typeof fetch;
-    await new MeetingMinutesSlackClient("token", fetchImpl).postIntakePausedToUser("C1", "U1");
+    await new MeetingMinutesSlackClient("token", fetchImpl).postIntakePausedToUser("C1", "U1", "1.0");
     expect(call?.url).toBe("https://slack.com/api/chat.postEphemeral");
-    expect(call?.body).toMatchObject({ channel: "C1", user: "U1" });
+    expect(call?.body).toMatchObject({ channel: "C1", thread_ts: "1.0", user: "U1" });
     expect(JSON.stringify(call?.body)).toContain("議事録の受付は一時停止中です");
     expect(JSON.stringify(call?.body)).toContain("保存先の選択またはやり直しをもう一度実行してください");
   });
@@ -299,7 +299,7 @@ describe("MeetingMinutesSlackClient", () => {
       return Response.json({ ok: true });
     }) as typeof fetch;
     await new MeetingMinutesSlackClient("token", fetchImpl)
-      .postIntakePausedToUser("C1", "U1", "run-1");
+      .postIntakePausedToUser("C1", "U1", "1.0", "run-1");
     expect(String(call?.body.text)).toContain(`問い合わせID: ${deriveCorrelationId("run-1", "intake", "INTAKE_PAUSED")}`);
     expect(String(call?.body.text)).not.toContain(
       deriveCorrelationId("C1:U1", "intake", "INTAKE_PAUSED"),

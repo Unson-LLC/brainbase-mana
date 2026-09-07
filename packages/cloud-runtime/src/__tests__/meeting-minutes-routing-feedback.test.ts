@@ -95,6 +95,11 @@ function expectPendingMessage(message: unknown, text: string, ephemeral = false)
   if (ephemeral) expect(message).toMatchObject({ response_type: "ephemeral" });
 }
 
+function expectRedoEphemeralMessage(message: unknown) {
+  expect(message).toMatchObject({ replace_original: false, response_type: "ephemeral",
+    channel: "C1", thread_ts: "1.0", user: "U1" });
+}
+
 const receiptText = "操作を受け付けました。確認しています。";
 
 function expectGenericReceipt(message: unknown) {
@@ -138,7 +143,7 @@ describe("meeting minutes routing feedback", () => {
       actionId: "mana_meeting_minutes_confirm_redo",
       value: { runId: "Ev1_F1", fileName: "定例.txt" },
     },
-  ])("sends a generic receipt while $name waits for tenant authority", async ({ actionId, value }) => {
+  ])("acknowledges immediately while $name waits for tenant authority", async ({ actionId, value }) => {
     let releaseTenant!: (effects: TenantInteractionEffects) => void;
     const tenantGate = new Promise<TenantInteractionEffects>((resolve) => { releaseTenant = resolve; });
     const resolveTenantEffects = vi.fn(() => tenantGate);
@@ -165,8 +170,13 @@ describe("meeting minutes routing feedback", () => {
 
     expect(response.status).toBe(200);
     expect(resolveTenantEffects).toHaveBeenCalledOnce();
-    await vi.waitFor(() => expect(updateBeforeTenant).toHaveBeenCalledOnce());
-    expectGenericReceipt(updateBeforeTenant.mock.calls[0]?.[1]);
+    const isRedo = actionId === "mana_meeting_minutes_redo" || actionId === "mana_meeting_minutes_confirm_redo";
+    if (isRedo) {
+      expect(updateBeforeTenant).not.toHaveBeenCalled();
+    } else {
+      await vi.waitFor(() => expect(updateBeforeTenant).toHaveBeenCalledOnce());
+      expectGenericReceipt(updateBeforeTenant.mock.calls[0]?.[1]);
+    }
     expect(updateOriginal).not.toHaveBeenCalled();
     expect(isIntakePaused).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
@@ -175,6 +185,10 @@ describe("meeting minutes routing feedback", () => {
     await Promise.all(background.work);
     expect(isIntakePaused).toHaveBeenCalledOnce();
     expect(updateOriginal).toHaveBeenCalled();
+    if (isRedo) {
+      expect(updateOriginal).toHaveBeenCalledOnce();
+      expectRedoEphemeralMessage(updateOriginal.mock.calls[0]?.[1]);
+    }
     if (actionId === "mana_meeting_minutes_choose_destination" ||
       actionId === "mana_meeting_minutes_confirm_redo") expect(send).toHaveBeenCalledOnce();
   });
@@ -421,13 +435,22 @@ describe("meeting minutes routing feedback", () => {
     expect(updateOriginal).not.toHaveBeenCalled();
     releaseTenant(await tenantBoundary.resolveTenantEffects(feedbackTenantIdentity()));
     await vi.waitFor(() => expect(isIntakePaused).toHaveBeenCalledOnce());
-    expect(updateOriginal).toHaveBeenCalledOnce();
-    expectPendingMessage(updateOriginal.mock.calls[0]?.[1], pending, ephemeral);
+    const isRedo = ephemeral;
+    if (isRedo) {
+      expect(updateOriginal).not.toHaveBeenCalled();
+    } else {
+      expect(updateOriginal).toHaveBeenCalledOnce();
+      expectPendingMessage(updateOriginal.mock.calls[0]?.[1], pending, ephemeral);
+    }
     expect(isIntakePaused).toHaveBeenCalledOnce();
-    expect(updateOriginal.mock.invocationCallOrder[0]).toBeLessThan(isIntakePaused.mock.invocationCallOrder[0]!);
+    if (!isRedo) expect(updateOriginal.mock.invocationCallOrder[0]).toBeLessThan(isIntakePaused.mock.invocationCallOrder[0]!);
 
     release(false);
     await Promise.all(background.work);
+    if (isRedo) {
+      expect(updateOriginal).toHaveBeenCalledOnce();
+      expectRedoEphemeralMessage(updateOriginal.mock.calls[0]?.[1]);
+    }
     if (final) expect(JSON.stringify(updateOriginal.mock.calls.at(-1)?.[1])).toContain(final);
     if (actionId === "mana_meeting_minutes_choose_destination") expect(send).toHaveBeenCalledOnce();
     if (actionId === "mana_meeting_minutes_confirm_redo") expect(send).toHaveBeenCalledOnce();
@@ -463,9 +486,8 @@ describe("meeting minutes routing feedback", () => {
 
     expect(response.status).toBe(200);
     await Promise.all(background.work);
-    expect(updateOriginal).toHaveBeenCalledTimes(2);
-    expectPendingMessage(updateOriginal.mock.calls[0]?.[1], "定例.txt", true);
-    expect(updateOriginal.mock.calls[1]?.[1]).toMatchObject({ replace_original: false, response_type: "ephemeral" });
+    expect(updateOriginal).toHaveBeenCalledOnce();
+    expectRedoEphemeralMessage(updateOriginal.mock.calls[0]?.[1]);
     expect(JSON.stringify(updateOriginal.mock.calls.at(-1)?.[1])).toContain("受付は一時停止中");
     expect(send).not.toHaveBeenCalled();
   });
@@ -500,9 +522,8 @@ describe("meeting minutes routing feedback", () => {
 
     expect(response.status).toBe(200);
     await Promise.all(background.work);
-    expect(updateOriginal).toHaveBeenCalledTimes(2);
-    expectPendingMessage(updateOriginal.mock.calls[0]?.[1], "定例.txt", true);
-    expect(updateOriginal.mock.calls[1]?.[1]).toMatchObject({ replace_original: false, response_type: "ephemeral" });
+    expect(updateOriginal).toHaveBeenCalledOnce();
+    expectRedoEphemeralMessage(updateOriginal.mock.calls[0]?.[1]);
     const projected = JSON.stringify(updateOriginal.mock.calls.at(-1)?.[1]);
     expect(projected).toContain("temporary_failure");
     expect(projected).not.toContain("Bearer secret");

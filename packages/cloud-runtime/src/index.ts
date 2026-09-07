@@ -3198,7 +3198,7 @@ async function processTenantMeetingMinutesSelection(input: {
     isPaused: () => meetingMinutesDeploymentGate(env, tenantId).isIntakePaused(),
     notify: (command) => effects.slack(`intake-paused:${command.runId}`, command,
       (credentialFetch) => new MeetingMinutesSlackClient(undefined, credentialFetch)
-        .postIntakePausedToUser(command.channelId, command.userId, command.runId)),
+        .postIntakePausedToUser(command.channelId, command.userId, command.threadTs, command.runId)),
     logPaused: (command) => console.info(JSON.stringify({ event: "meeting_minutes_intake_paused", runId: command.runId })),
     logDisabled: (command) => console.info(JSON.stringify({ event: "meeting_minutes_intake_disabled", runId: command.runId })),
     logNotificationFailure: (command, error) => console.warn(JSON.stringify({
@@ -3310,7 +3310,7 @@ async function processTenantMeetingMinutesRedo(input: {
     isPaused: () => meetingMinutesDeploymentGate(env, tenantContext.tenant.tenant_id).isIntakePaused(),
     notify: (queuedCommand) => effects.slack(`intake-paused:${queuedCommand.runId}`, queuedCommand,
       (credentialFetch) => new MeetingMinutesSlackClient(undefined, credentialFetch)
-        .postIntakePausedToUser(queuedCommand.channelId, queuedCommand.userId, queuedCommand.runId)),
+        .postIntakePausedToUser(queuedCommand.channelId, queuedCommand.userId, queuedCommand.threadTs, queuedCommand.runId)),
     logPaused: (queuedCommand) => console.info(JSON.stringify({
       event: "meeting_minutes_intake_paused", runId: queuedCommand.runId,
     })),

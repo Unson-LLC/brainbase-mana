@@ -394,12 +394,13 @@ export class MeetingMinutesSlackClient {
         text: `:warning: *議事録の新規受付は一時停止中です*\n復旧後にファイルを投稿し直してください。\n問い合わせID: ${correlationId}` } }],
     });
   }
-  async postIntakePausedToUser(channelId: string, userId: string, runId?: string): Promise<void> {
+  async postIntakePausedToUser(channelId: string, userId: string, threadTs: string, runId?: string): Promise<void> {
     const seed = runId?.trim() || `legacy-intake:${channelId}:${userId}`;
     const correlationId = deriveCorrelationId(seed, "intake", "INTAKE_PAUSED");
     await this.post("chat.postEphemeral", {
       channel: channelId,
       user: userId,
+      thread_ts: threadTs,
       text: `議事録の受付は一時停止中です。復旧後に、保存先の選択またはやり直しをもう一度実行してください。問い合わせID: ${correlationId}`,
       blocks: [{ type: "section", text: { type: "mrkdwn",
         text: `:warning: *議事録の受付は一時停止中です*\n復旧後に、保存先の選択またはやり直しをもう一度実行してください。\n問い合わせID: ${correlationId}` } }],
@@ -696,6 +697,11 @@ export class MeetingMinutesSlackClient {
     await this.post("chat.update", { channel: run.sourceChannelId, ts: run.slack.processingTs,
       text: message.text, blocks: message.blocks });
     return run.slack.processingTs;
+  }
+  async postInteractionNotice(channelId: string, threadTs: string, userId: string,
+    message: Pick<SlackSelectionMessage, "text" | "blocks">): Promise<void> {
+    await this.post("chat.postEphemeral", { channel: channelId, thread_ts: threadTs,
+      user: userId, text: message.text, blocks: message.blocks }, AbortSignal.timeout(1_500));
   }
   async showRedoSuperseded(run: MeetingMinutesRun, userId: string): Promise<void> {
     const text = "保存先変更は実行しませんでした。古いボタンのため、現在の議事録・タスクは変更していません。";
