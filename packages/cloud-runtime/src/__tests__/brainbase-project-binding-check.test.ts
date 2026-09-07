@@ -84,7 +84,7 @@ describe("Brainbase meeting-minutes project deployment check", () => {
       taskToken: "task-token", graphToken: "" })).rejects.toThrow("meeting_minutes_brainbase_project_check_auth_missing:graph");
   });
 
-  it("fails closed when either runtime API omits a configured project", async () => {
+  it("accepts an authorized empty Task scope for a project without tasks", async () => {
     const path = await configFile(config());
     await expect(assertBrainbaseMeetingMinutesRuntimeProjects({ configPath: path,
       taskBaseUrl: "https://task.brainbase.example", graphBaseUrl: "https://graph.brainbase.example",
@@ -94,7 +94,9 @@ describe("Brainbase meeting-minutes project deployment check", () => {
         : (init.headers as Record<string, string>).authorization === "Bearer task-token"
           ? Response.json({ records: [] })
           : Response.json({ records: [{ payload: { project_code: "kartz" } }] })) }))
-      .rejects.toThrow("meeting_minutes_brainbase_project_check_task_scope:kartz_missing");
+      .resolves.toEqual(expect.objectContaining({
+        task: expect.objectContaining({ requiredCodes: ["kartz"], authorizedCodes: ["kartz"] }),
+      }));
   });
 
   it("accepts a Task-only scope only after filtered Task API readback", async () => {

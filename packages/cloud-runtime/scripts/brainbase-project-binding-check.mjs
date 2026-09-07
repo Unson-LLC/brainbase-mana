@@ -89,9 +89,6 @@ async function assertTaskProjectCodeReadable({ code, baseUrl, token, timeoutMs, 
   if (!body || typeof body !== "object" || !Array.isArray(body.items)) {
     throw new Error(`${errorPrefix}_response_invalid`);
   }
-  const matches = body.items.some((item) => Array.isArray(item?.project_codes)
-    && item.project_codes.map(clean).includes(code));
-  if (!matches) throw new Error(`${errorPrefix}_missing`);
 }
 
 export async function assertBrainbaseMeetingMinutesProjects({
