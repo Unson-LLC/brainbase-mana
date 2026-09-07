@@ -382,6 +382,8 @@ describe("authorized meeting-minutes generation probe route", () => {
 
   it("corrects a pending receipt OutcomeCase without re-entering the full minutes workflow", async () => {
     const receiptRun = await retryableReceiptRun({ outcomeCaseId: "wrong_case" });
+    const originalRevision = receiptRun.revision;
+    const originalReceiptIdempotencyKey = receiptRun.runReceipt?.idempotencyKey;
     runtimeMocks.loadRun.mockImplementation(async () => receiptRun);
 
     const response = await fetchWorker(authorizedReceiptRetryRequest({ tenantId: TENANT_ID,
@@ -390,7 +392,9 @@ describe("authorized meeting-minutes generation probe route", () => {
 
     expect(response.status).toBe(200);
     expect(receiptRun.outcomeCaseId).toBe("correct_case");
-    expect(receiptRun.revision).toBe(2);
+    expect(receiptRun.revision).toBe(originalRevision);
+    expect(receiptRun.receiptRevision).toBe(1);
+    expect(receiptRun.runReceipt?.idempotencyKey).not.toBe(originalReceiptIdempotencyKey);
     expect(runtimeMocks.saveRun).toHaveBeenCalled();
     expect(runtimeMocks.executeTenantRuntimeOperation).toHaveBeenCalledOnce();
     expect(runtimeMocks.runProbe).not.toHaveBeenCalled();

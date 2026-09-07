@@ -1703,6 +1703,11 @@ function meetingMinutesClients(
         effects.slack(`destination-selection:${run.runId}:revision-${run.redo?.revision ?? run.revision ?? 0}`,
           { kind: "destination_selection", runId: run.runId, revision: run.redo?.revision ?? run.revision ?? 0 },
           (credentialFetch) => sourceSlack(credentialFetch).showDestinationSelection(run, destinations)),
+      showRedoSuperseded: (run: MeetingMinutesRun, command: MeetingMinutesRedo) => effects.slack(
+        `redo-superseded:${run.runId}:${command.actionTs}`,
+        { kind: "redo_superseded", runId: run.runId, userId: command.userId, actionTs: command.actionTs,
+          requestedRevision: command.revision ?? 0, revision: run.revision ?? 0 },
+        (credentialFetch) => sourceSlack(credentialFetch).showRedoSuperseded(run, command.userId)),
       showRedoFailure: (run: MeetingMinutesRun) => effects.slack(
         `redo-failure:${run.runId}:revision-${run.redo?.revision ?? run.revision ?? 0}`,
         { kind: "redo_failure", runId: run.runId, revision: run.redo?.revision ?? run.revision ?? 0 },
@@ -3721,7 +3726,7 @@ export default {
         // A changed OutcomeCase changes the immutable receipt payload. Advance
         // only the receipt identity; completed GitHub, Slack, generation and
         // task checkpoints remain untouched and are never re-entered here.
-        saved.revision = (saved.revision ?? 0) + 1;
+        saved.receiptRevision = (saved.receiptRevision ?? 0) + 1;
         const correctedReceipt = await buildMeetingMinutesRunReceipt(saved);
         if (!correctedReceipt) return saved;
         saved.runReceipt = {
