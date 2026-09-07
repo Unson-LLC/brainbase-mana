@@ -164,9 +164,11 @@ TechKnightSandbox.outboundByHost = {
                     "brainbase_judgment_state_record",
                   "brainbase_knowledge_resolve",
                 ],
-                companyAuthorityResponse: (
-                  resolved.company_authority_envelope as { company_authority_response: unknown }
-                ).company_authority_response,
+                companyAuthorityResponse: /^D[A-Z0-9]+$/.test(resolved.tenant_context.slack.channel_id)
+                  ? (
+                    resolved.company_authority_envelope as { company_authority_response: unknown }
+                  ).company_authority_response
+                  : undefined,
               }
               : undefined,
           ),

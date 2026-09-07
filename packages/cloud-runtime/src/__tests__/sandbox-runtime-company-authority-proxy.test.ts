@@ -65,6 +65,7 @@ import type { SandboxRuntimeEnv } from "../sandbox-runtime.js";
 const resolvedWithCompanyAuthority = {
   tenant_context: {
     workspace_connection: { workspace_id: "T-workspace" },
+    slack: { channel_id: "D0BPK9TFZU6" },
   },
   expected_scope: {},
   company_authority_envelope: {
@@ -190,6 +191,34 @@ describe("Company Authority sandbox proxy guard", () => {
           "brainbase_knowledge_resolve",
         ],
         companyAuthorityResponse: { schema_version: "1.0", authority: { decision: "auto" } },
+      },
+    );
+  });
+
+  it("does not forward the personal owner authority to a non-DM Brainbase request", async () => {
+    proxyMocks.resolve.mockResolvedValue({
+      ...resolvedWithCompanyAuthority,
+      tenant_context: {
+        ...resolvedWithCompanyAuthority.tenant_context,
+        slack: { channel_id: "C-channel" },
+      },
+    });
+
+    const route = TechKnightSandbox.outboundByHost![BRAINBASE_MCP_PROXY_HOST];
+    const response = await route(request(BRAINBASE_MCP_PROXY_HOST), env(), outboundContext);
+
+    expect(response.status).toBe(200);
+    expect(proxyMocks.handleBrainbaseMcpProxyRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.anything(),
+      expect.any(Function),
+      {
+        allowedTools: [
+          "brainbase_resolve_turn",
+          "brainbase_judgment_state_record",
+          "brainbase_knowledge_resolve",
+        ],
+        companyAuthorityResponse: undefined,
       },
     );
   });
