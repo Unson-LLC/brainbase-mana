@@ -47,3 +47,10 @@ it.each([true, false])("requires exact denial tool identity (%s)", (matches) => 
     permissionDenialToolMatch: matches, failureCategory: matches ? "pretool_denied" : "unknown",
   });
 });
+
+it("preserves the known resolver input error code", () => {
+  expect(replyToolFailureDiagnostics(stream([
+    { type: "tool_use", id: "1", name },
+    { type: "tool_result", tool_use_id: "1", is_error: true, content: "judgment_resolution_input_invalid" },
+  ]))[0]?.errorCodes).toEqual(["judgment_resolution_input_invalid"]);
+});

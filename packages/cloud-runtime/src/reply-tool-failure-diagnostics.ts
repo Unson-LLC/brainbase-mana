@@ -7,7 +7,9 @@ const CODES = [
   "COMPANY_AUTHORITY_OPERATION_FORBIDDEN", "TENANT_CONTEXT_INVALID",
   "AUTHORITY_CONTEXT_EXPIRED", "brainbase_project_not_accessible",
   "brainbase_api_unavailable", "judgment_state_invalid",
-  "judgment_turn_resolution_binding_invalid",
+  "judgment_turn_resolution_binding_invalid", "judgment_resolution_input_invalid",
+  "brainbase_judgment_binding_unavailable", "brainbase_api_response_invalid",
+  "brainbase_auth_context_invalid", "brainbase_auth_unavailable", "brainbase_api_error",
 ] as const;
 type RecordValue = Record<string, unknown>;
 const record = (v: unknown): RecordValue | undefined =>
