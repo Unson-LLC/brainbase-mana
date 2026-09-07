@@ -241,6 +241,7 @@ describe("tenant Slack runtime wiring", () => {
     expect(source).toContain("[capabilityId]: authorizationDesiredEffect");
     expect(source).toContain("capability_id: capabilityId");
     expect(reply).toContain("reissueLongRunningTenantContext(");
+    expect(reply).toContain("env,\n                  activeTenantContext,");
   });
 
   it("turns only classified run-receipt failures into stable Brainbase boundary codes", () => {

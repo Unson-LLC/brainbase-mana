@@ -2551,7 +2551,7 @@ export async function executeCompanyAuthorityReplyOperation(
               issue: async () => {
                 const fresh = await reissueLongRunningTenantContext(
                   env,
-                  tenantContext,
+                  activeTenantContext,
                   expectedScope,
                   request.requested_action.desired_effect,
                   {

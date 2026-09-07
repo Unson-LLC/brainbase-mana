@@ -164,6 +164,43 @@ describe("durable tenant boundary integration", () => {
     }));
   });
 
+  it("keeps the accepted Company Authority operation gate while refreshing only its tenant context", async () => {
+    const namespace = new IsolatedBoundaryNamespace();
+    const registry = createDurableTenantBoundaryRegistry(namespace);
+    const authorityEnvelope = { decision: "auto" };
+    const handle = await registry.register({
+      tenant_context: CONTEXT,
+      expected_scope: SCOPE,
+      company_authority_envelope: authorityEnvelope,
+      now: NOW,
+    });
+    const refreshed = {
+      ...CONTEXT,
+      expires_at: "2026-08-17T04:06:00.000Z",
+    } as TenantContextEnvelope;
+
+    await registry.refresh(handle, {
+      tenant_context: refreshed,
+      now: "2026-08-17T04:00:30.000Z",
+    });
+    const resolved = await resolveDurableTenantBoundaryContext(namespace, new Request(
+      "https://gateway.internal/api/runtime/gateway",
+      { headers: { [TENANT_BOUNDARY_HANDLE_HEADER]: handle } },
+    ), ["mcp_gateway", "brainbase_proxy"], "2026-08-17T04:02:00.000Z");
+
+    expect(resolved).toEqual({
+      tenant_context: refreshed,
+      expected_scope: SCOPE,
+      company_authority_envelope: authorityEnvelope,
+    });
+    expect(namespace.validate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      company_authority_envelope: authorityEnvelope,
+    }));
+    expect(namespace.validate.mock.calls.slice(1).every(
+      ([input]) => !("company_authority_envelope" in input),
+    )).toBe(true);
+  });
+
   it("rejects a refresh that changes the tenant identity and keeps the accepted context", async () => {
     const namespace = new IsolatedBoundaryNamespace();
     const registry = createDurableTenantBoundaryRegistry(namespace);
