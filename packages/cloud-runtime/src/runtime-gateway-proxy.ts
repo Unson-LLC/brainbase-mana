@@ -32,7 +32,11 @@ export interface RuntimeGatewayPersonalKnowledgeAuthorityRequest {
 
 export interface RuntimeGatewayPersonalKnowledgeDependencies {
   tenantContext: TenantContextEnvelope;
-  resolveAuthority(input: RuntimeGatewayPersonalKnowledgeAuthorityRequest): Promise<unknown>;
+  resolveAuthority(input: RuntimeGatewayPersonalKnowledgeAuthorityRequest): Promise<{
+    companyAuthorityResponse: unknown;
+    ownerPersonId: string;
+    organizationId: string;
+  }>;
 }
 
 export interface RuntimeGatewayProxyDependencies {
@@ -278,9 +282,9 @@ export function createRuntimeGatewayProxyHandler(
           body.request_id,
         )) return responseError("gateway_denied", 403);
 
-        let companyAuthorityResponse: unknown;
+        let authority: Awaited<ReturnType<typeof personalKnowledge.resolveAuthority>>;
         try {
-          companyAuthorityResponse = await personalKnowledge.resolveAuthority({
+          authority = await personalKnowledge.resolveAuthority({
             capability: input.capability,
             effect: input.effect,
             requestId: body.request_id,
@@ -288,7 +292,11 @@ export function createRuntimeGatewayProxyHandler(
         } catch {
           return responseError("gateway_authority_denied", 403);
         }
-        if (!companyAuthorityResponse || typeof companyAuthorityResponse !== "object" || Array.isArray(companyAuthorityResponse)) {
+        if (!authority || typeof authority !== "object" || Array.isArray(authority)
+          || !authority.companyAuthorityResponse || typeof authority.companyAuthorityResponse !== "object"
+          || Array.isArray(authority.companyAuthorityResponse)
+          || typeof authority.ownerPersonId !== "string" || !authority.ownerPersonId.trim()
+          || typeof authority.organizationId !== "string" || !authority.organizationId.trim()) {
           return responseError("gateway_authority_denied", 403);
         }
 
@@ -302,14 +310,27 @@ export function createRuntimeGatewayProxyHandler(
         } catch {
           return responseError("gateway_not_configured", 503);
         }
-        const headers = new Headers({ "content-type": "application/json", accept: "application/json" });
+        const headers = new Headers({ accept: "application/json" });
+        headers.set("x-brainbase-proxy-person-id", authority.ownerPersonId);
+        headers.set("x-brainbase-organization-id", authority.organizationId);
+        headers.set("x-brainbase-access-reason", `mana_personal_kg:${body.request_id}`);
         if (env.BRAINBASE_PERSONAL_KNOWLEDGE_API_TOKEN) headers.set("authorization", `Bearer ${env.BRAINBASE_PERSONAL_KNOWLEDGE_API_TOKEN}`);
+        const isSearch = tool === "search_personal_kg";
+        if (isSearch) {
+          endpoint.searchParams.set("query", String(input.payload.query));
+          endpoint.searchParams.set("limit", String(input.payload.limit));
+        } else {
+          headers.set("content-type", "application/json");
+        }
         let upstream: Response;
         try {
           upstream = await providerFetch(endpoint, {
-            method: "POST",
+            method: isSearch ? "GET" : "POST",
             headers,
-            body: JSON.stringify({ ...input.payload, company_authority_response: companyAuthorityResponse }),
+            ...(!isSearch ? { body: JSON.stringify({
+              ...input.payload,
+              company_authority_response: authority.companyAuthorityResponse,
+            }) } : {}),
           });
         } catch {
           return responseError("gateway_upstream_failed", 502);

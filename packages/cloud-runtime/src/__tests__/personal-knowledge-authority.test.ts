@@ -256,9 +256,12 @@ describe("personal knowledge authority", () => {
     });
 
     expect(result).toMatchObject({
-      schema_version: "1.0",
-      contract_id: CONTRACT_ID,
-      context: expect.objectContaining({
+      ownerPersonId: "person-sato",
+      organizationId: "organization-tenant-a",
+      companyAuthorityResponse: {
+        schema_version: "1.0",
+        contract_id: CONTRACT_ID,
+        context: expect.objectContaining({
         actor: expect.objectContaining({ canonical_person_id: "person-sato" }),
         scope: expect.objectContaining({
           organization_id: "organization-tenant-a",
@@ -271,7 +274,8 @@ describe("personal knowledge authority", () => {
           capability_id: "personal_read",
           allowed_effects: ["read"],
         }),
-      }),
+        }),
+      },
     });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(requests[0]).toMatchObject({
@@ -303,13 +307,17 @@ describe("personal knowledge authority", () => {
     });
 
     expect(result).toMatchObject({
-      context: expect.objectContaining({
+      ownerPersonId: "person-sato",
+      organizationId: "organization-tenant-a",
+      companyAuthorityResponse: {
+        context: expect.objectContaining({
         authority: expect.objectContaining({
           decision: "auto",
           capability_id: "personal_write",
           allowed_effects: ["write"],
         }),
-      }),
+        }),
+      },
     });
   });
 
