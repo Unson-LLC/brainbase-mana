@@ -237,8 +237,9 @@ describe("tenant Slack runtime wiring", () => {
     expect(reply).toContain("request.requested_action.desired_effect");
     expect(reply).toContain("resource_ref: request.requested_action.resource_ref");
     expect(reply).toContain("project_hint: request.requested_action.project_hint");
-    expect(source).toContain("[expectedScope.capability_id]: authorizationDesiredEffect");
-    expect(source).toContain("capability_id: expectedScope.capability_id");
+    expect(reply).toContain("request.requested_action.capability_id");
+    expect(source).toContain("[capabilityId]: authorizationDesiredEffect");
+    expect(source).toContain("capability_id: capabilityId");
     expect(reply).toContain("reissueLongRunningTenantContext(");
   });
 
