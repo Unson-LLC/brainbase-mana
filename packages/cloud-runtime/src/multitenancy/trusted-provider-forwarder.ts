@@ -44,6 +44,7 @@ export interface BrainbaseTrustedProviderForwarderEnv {
 export interface BrainbaseTrustedProviderForwarderOptions {
   env: BrainbaseTrustedProviderForwarderEnv;
   tenant_context: TenantContextEnvelope;
+  company_authority?: boolean;
 }
 
 const PROVIDER_AUTH_HEADERS = [
@@ -195,6 +196,7 @@ function idempotencyKey(request: Request, operation: string): string | undefined
 async function mapProviderRequest(
   request: Request,
   env: BrainbaseTrustedProviderForwarderEnv,
+  companyAuthority = false,
 ): Promise<MappedProviderRequest> {
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
@@ -302,7 +304,10 @@ async function mapProviderRequest(
 
   const mcpPath = relativePath(url, configuredBase(env.BRAINBASE_MCP_BASE_URL));
   if (mcpPath === "/mcp" && method === "POST") {
-    return { provider_operation: "brainbase.mcp.post", request: addBody({}) };
+    return {
+      provider_operation: companyAuthority ? "brainbase.authority_mcp.post" : "brainbase.mcp.post",
+      request: addBody({}),
+    };
   }
   if (mcpPath === "/host/judgment/hook" && method === "POST") {
     return { provider_operation: "brainbase.judgment_hook.post", request: addBody({}) };
@@ -394,7 +399,11 @@ export function createBrainbaseTrustedProviderForwarderFromEnv(
   if (!serviceFetch) throw new Error("runtime_configuration_invalid");
   return Object.freeze({
     async forward(input: TrustedProviderForwardInput): Promise<Response> {
-      const mapped = await mapProviderRequest(sanitizeTrustedProviderRequest(input.request), options.env);
+      const mapped = await mapProviderRequest(
+        sanitizeTrustedProviderRequest(input.request),
+        options.env,
+        options.company_authority === true,
+      );
       let response: Response;
       try {
         response = await serviceFetch(endpoint, {

@@ -218,6 +218,41 @@ const FORWARD_CASES: ForwardCase[] = [
 ];
 
 describe("Brainbase trusted provider forwarder HTTP integration", () => {
+  it("routes Company Authority MCP calls through Brainbase project binding", async () => {
+    let providerOperation: string | undefined;
+    const service = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { provider_operation: string };
+      providerOperation = body.provider_operation;
+      return Response.json({
+        provider: "brainbase",
+        operation_id: BINDING.operation_id,
+        provider_operation: body.provider_operation,
+        status: 200,
+        response_encoding: "json",
+        content_type: "application/json",
+        body: { jsonrpc: "2.0", result: {} },
+      });
+    });
+    const forwarder = createBrainbaseTrustedProviderForwarderFromEnv({
+      env: { ...BASE_ENV, BRAINBASE_TENANT_RUNTIME_SERVICE: { fetch: service } },
+      tenant_context: TENANT_CONTEXT,
+      company_authority: true,
+    });
+
+    const response = await forwarder.forward({
+      lease: LEASE,
+      expected_binding: { ...BINDING, audience: "mcp.example.test" },
+      request: jsonRequest("https://mcp.example.test/mcp", "POST", {
+        jsonrpc: "2.0", method: "tools/call", id: 1,
+        params: { name: "brainbase_knowledge_resolve", arguments: { project_code: "untrusted" } },
+      }),
+      now: LEASE.issued_at,
+    });
+
+    expect(response.status).toBe(200);
+    expect(providerOperation).toBe("brainbase.authority_mcp.post");
+  });
+
   it.each([
     ["GET", "https://personal.example.test/api/personal-knowledge/search"],
     ["POST", "https://personal.example.test/api/personal-knowledge/search?owner=other"],

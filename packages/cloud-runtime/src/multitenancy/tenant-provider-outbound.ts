@@ -94,6 +94,7 @@ export function tenantCredentialFetchForResolvedContext(
   const productionForwarder = trustedForwarder ?? createBrainbaseTrustedProviderForwarderFromEnv({
     env,
     tenant_context: resolved.tenant_context,
+    company_authority: resolved.company_authority_envelope !== undefined,
   });
   return createTenantCredentialFetch({
     envelope: resolved.tenant_context,
