@@ -411,8 +411,15 @@ export async function reissueCompanyAuthorityTenantContext(input: {
   request: ObservedExecutionRequestV1;
   client: CompanyAuthorityClient;
   acceptance: CompanyAuthorityAcceptanceOptions;
+  require_auto?: boolean;
 }): Promise<TenantContextEnvelope> {
   const accepted = await resolveAcceptedCompanyAuthorityRequest(input);
+  if (input.require_auto && accepted.context.authority.decision !== "auto") {
+    failAtBoundary("slack_delivery", "AUTHORITY_SCOPE_MISMATCH", {
+      phase: "company_authority_non_auto_runtime_boundary_forbidden",
+      decision: accepted.context.authority.decision,
+    });
+  }
   return structuredClone(accepted.context.tenant_context) as unknown as TenantContextEnvelope;
 }
 

@@ -1,3 +1,4 @@
+import { createDeterministicSharedId } from "./multitenancy/ids.js";
 import { runMeetingMinutesGenerationProbe } from "./meeting-minutes-generation-probe.js";
 import {
   getWorkspace,
@@ -1131,11 +1132,32 @@ function createTenantInteractionEffectResolver(env: Env) {
     });
   };
   return async (source: TenantInteractionIdentity, destination?: MeetingMinutesDestination,
-    replyIntakeSource?: TenantContextEnvelope): Promise<TenantInteractionEffects> => {
+    replyIntakeSource?: TenantContextEnvelope,
+    companyAuthority?: {
+      request: ObservedExecutionRequestV1;
+      client: CompanyAuthorityClient;
+      acceptance: Omit<CompanyAuthorityAcceptanceOptions, "now">;
+    }): Promise<TenantInteractionEffects> => {
     const destinationAuthorization = destinationAuthorizationForSelection(env, destination);
-    const sourceResolved = await resolve(source, destinationAuthorization);
+    const resolveContext = async (identity: TenantInteractionIdentity): Promise<TenantContextEnvelope> => {
+      if (!companyAuthority) return (await resolve(identity, destinationAuthorization)).tenant_context;
+      // Preserve the accepted actor, resource, project, capability and effect.
+      // Child correlation IDs also separate the producer's operation receipts.
+      const correlationId = identity.event_id === source.event_id
+        ? companyAuthority.request.correlation_id
+        : await createDeterministicSharedId("cor_", JSON.stringify([
+          companyAuthority.request.correlation_id, identity.event_id,
+        ]));
+      return reissueCompanyAuthorityTenantContext({
+        request: { ...structuredClone(companyAuthority.request), correlation_id: correlationId,
+          delivery: { ...companyAuthority.request.delivery, event_id: identity.event_id } },
+        client: companyAuthority.client,
+        acceptance: { ...companyAuthority.acceptance, now: new Date().toISOString() },
+        require_auto: true,
+      });
+    };
+    const sourceTenantContext = await resolveContext(source);
     const clients = getClients();
-    const sourceTenantContext = sourceResolved.tenant_context;
     if (replyIntakeSource) assertReplyIntakeTenantBoundary(replyIntakeSource, sourceTenantContext, source.event_id);
     const resolveEffect = async (effectId: string, target: TenantInteractionTarget) => {
       const identity: TenantInteractionIdentity = {
@@ -1143,8 +1165,7 @@ function createTenantInteractionEffectResolver(env: Env) {
         ...target,
         event_id: await childInteractionEventId(source.event_id, effectId),
       };
-      const resolved = await resolve(identity, destinationAuthorization);
-      const tenantContext = resolved.tenant_context;
+      const tenantContext = await resolveContext(identity);
       if (replyIntakeSource) assertReplyIntakeTenantBoundary(replyIntakeSource, tenantContext, identity.event_id);
       if (tenantContext.tenant.tenant_id !== sourceTenantContext.tenant.tenant_id
         || tenantContext.placement.deployment_id !== sourceTenantContext.placement.deployment_id
@@ -2516,7 +2537,11 @@ export async function executeCompanyAuthorityReplyOperation(
     const credentialFetch = createReplyIntakeEffectFetch({
       event,
       getTenantContext: () => activeTenantContext,
-      resolveEffects: (identity, context) => resolveReplyIntakeEffects(identity, undefined, context),
+      resolveEffects: (identity, context) => resolveReplyIntakeEffects(identity, undefined, context, {
+        request: envelope.company_authority_request,
+        client: activeRuntimeClients.company_authority,
+        acceptance: config.acceptance,
+      }),
       fallback: (req) => boundary("brainbase_proxy", () => brokerFetch(req)),
     });
     const stub = env.TECHKNIGHT_WORKSPACE.get(env.TECHKNIGHT_WORKSPACE.idFromName(workspaceName(event)));

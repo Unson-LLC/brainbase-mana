@@ -240,7 +240,7 @@ function tenantContext(projectIds: string[] = [projectId]) {
       organization_ids: ["organization-1"],
       project_ids: projectIds,
       data_scopes: ["tasks:tenant"],
-      capability_ids: ["runtime.execute"],
+      capability_ids: ["runtime.execute", "company_authority_v1"],
     },
     placement: { deployment_id: deploymentId, profile: "shared_cloud" as const },
     slack: {
@@ -662,8 +662,11 @@ describe("Company Authority runtime.execute reply executor", () => {
   });
 
   it("routes intake through child ownership while preserving the ordinary reply owner", async () => {
+    runtimeMocks.reissueCompanyAuthorityTenantContext.mockImplementation(async ({ request }) => ({
+      ...tenantContext(), slack: { ...tenantContext().slack, event_id: request.delivery.event_id },
+    }));
     runtimeMocks.resolveSlackWorkerIngress.mockImplementation(async ({ identity }) => ({
-      tenant_context: { ...tenantContext(), slack: { ...tenantContext().slack, event_id: identity.event_id } },
+      tenant_context: { ...tenantContext(), authorization: { ...tenantContext().authorization, capability_ids: ["runtime.execute"] }, slack: { ...tenantContext().slack, event_id: identity.event_id } },
       authoritative_snapshot: snapshot,
     }));
     const ordinaryRuntime = runtimeMocks.executeReplyRuntime.getMockImplementation()!;
@@ -674,6 +677,7 @@ describe("Company Authority runtime.execute reply executor", () => {
         ["assistant.threads.setStatus", { channel_id: channelId, thread_ts: threadTs, status: "分析しています…" }],
         ["assistant.threads.setStatus", { channel_id: channelId, thread_ts: threadTs, status: "" }],
         ["reactions.remove", { channel: channelId, timestamp: event().messageTs, name: "eyes" }],
+        ["reactions.add", { channel: channelId, timestamp: event().messageTs, name: "eyes" }],
       ] as const) {
         await expect(fetch(`https://slack.com/api/${path}`, { method: "POST",
           headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
@@ -691,20 +695,39 @@ describe("Company Authority runtime.execute reply executor", () => {
     });
     await expect(executeCompanyAuthorityReplyOperation(runtimeEnv(), operation())).resolves.toMatchObject({ applied: true });
     const ids = runtimeMocks.postTenantSlackReply.mock.calls.map(([input]) => input.effect_id);
-    expect(ids).toHaveLength(5);
+    expect(runtimeMocks.resolveSlackWorkerIngress).not.toHaveBeenCalled();
+    const reissues = runtimeMocks.reissueCompanyAuthorityTenantContext.mock.calls.map(([input]) => input.request);
+    const children = reissues.filter(request => request.delivery.event_id !== event().eventId);
+    expect(children).toHaveLength(5);
+    expect(children[0].correlation_id).toBe(children[4].correlation_id);
+    expect(reissues.filter(request => request.delivery.event_id === event().eventId).every(request => request.correlation_id === operation().company_authority_envelope.correlation_id)).toBe(true);
+    expect(new Set(children.map(request => request.correlation_id)).size).toBe(4);
+    expect(children.every(request => request.correlation_id !== operation().company_authority_envelope.correlation_id)).toBe(true);
+
+    for (const [input] of runtimeMocks.reissueCompanyAuthorityTenantContext.mock.calls) {
+      expect(input.require_auto).toBe(true);
+      expect(input.request.provider_identity).toEqual(operation().company_authority_envelope.company_authority_request.provider_identity);
+      expect(input.request.requested_action).toEqual(operation().company_authority_envelope.company_authority_request.requested_action);
+      expect(input.request.delivery).toMatchObject({ channel_id: channelId, thread_ts: threadTs });
+    }
+    expect(ids).toHaveLength(6);
     expect(new Set(ids).size).toBe(5);
     expect(ids).toContain("provider-key-1");
-    expect(ids.filter((id: string) => id.startsWith("reply-intake:"))).toHaveLength(4);
+    expect(ids.filter((id: string) => id.startsWith("reply-intake:"))).toHaveLength(5);
     expect(runtimeMocks.slackRequests.filter(({ request }) => request.url.endsWith("chat.postMessage"))).toHaveLength(1);
   });
 
-  it.each(["source", "child"])("rejects intake %s boundary drift before provider delivery", async (stage) => {
+  it.each(["source", "child"].flatMap(stage => ["actor", "project", "capability"].map(field => [stage, field])))("rejects intake %s %s drift before provider delivery", async (stage, field) => {
     let calls = 0;
-    runtimeMocks.resolveSlackWorkerIngress.mockImplementation(async ({ identity }) => {
+    runtimeMocks.reissueCompanyAuthorityTenantContext.mockImplementation(async ({ request }) => {
       const context = tenantContext();
-      context.slack.event_id = identity.event_id;
-      if (++calls === (stage === "source" ? 1 : 2)) context.actor.principal_id = "different-person";
-      return { tenant_context: context, authoritative_snapshot: snapshot };
+      context.slack.event_id = request.delivery.event_id;
+      if (++calls === (stage === "source" ? 1 : 2)) {
+        if (field === "actor") context.actor.principal_id = "different-person";
+        if (field === "project") context.authorization.project_ids.push("different-project");
+        if (field === "capability") context.authorization.capability_ids.push("different-capability");
+      }
+      return context;
     });
     const ordinaryRuntime = runtimeMocks.executeReplyRuntime.getMockImplementation()!;
     runtimeMocks.executeReplyRuntime.mockImplementationOnce(async (input: Record<string, unknown>) => {

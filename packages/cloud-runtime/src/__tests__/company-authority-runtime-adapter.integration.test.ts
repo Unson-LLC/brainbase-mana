@@ -230,6 +230,18 @@ describe("company authority runtime adapter foundation after explicit opt-in", (
       expect(resolve, decision).toHaveBeenCalledWith(fixture.request);
       expect(accepted.context, decision).toEqual(fixture.context);
       expect(reissuedTenantContext, decision).toEqual(fixture.context.tenant_context);
+      const intakeReissue = reissueCompanyAuthorityTenantContext({
+        request: fixture.request, client: { resolve }, require_auto: true,
+        acceptance: {
+          expected_audience: contract.signature.audience,
+          expected_deployment_id: fixture.context.tenant_context.placement.deployment_id,
+          now: fixture.evaluation_time, public_jwk: key.public_jwk,
+          tenant_context_public_jwk: key.public_jwk, tenant_context_key_id: key.key_id,
+        },
+      });
+      if (decision === "auto") await expect(intakeReissue).resolves.toEqual(fixture.context.tenant_context);
+      else await expect(intakeReissue).rejects.toMatchObject({ boundary: "slack_delivery", code: "AUTHORITY_SCOPE_MISMATCH" });
+
       expect(accepted.decision).toBe(decision);
       expect(businessEffect).toHaveBeenCalledTimes(decision === "auto" ? 1 : 0);
       expect(accepted.result).toBe(decision === "auto" ? "auto-executed" : undefined);

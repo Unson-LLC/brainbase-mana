@@ -15,7 +15,7 @@ describe("tenant Slack runtime wiring", () => {
     expect(resolverStart).toBeGreaterThan(-1);
     expect(resolver).toContain("destinationAuthorizationForSelection(env, destination)");
     expect(resolver.indexOf("destinationAuthorizationForSelection(env, destination)"))
-      .toBeLessThan(resolver.indexOf("const sourceResolved = await resolve("));
+      .toBeLessThan(resolver.indexOf("const sourceTenantContext = await resolveContext("));
     expect(queueStart).toBeGreaterThan(-1);
     expect(queueIngress).toContain("destinationAuthorizationForSelection(env, destination)");
     expect(queueIngress.indexOf("destinationAuthorizationForSelection(env, destination)"))
