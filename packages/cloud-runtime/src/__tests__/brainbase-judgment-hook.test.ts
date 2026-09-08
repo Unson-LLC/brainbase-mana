@@ -1189,6 +1189,7 @@ describe("Brainbase judgment Hook forwarder", () => {
           } }
           : payload.hook_event_name === "PostToolUse"
             ? (payload.tool_name === "mcp__brainbase__brainbase_judgment_state_record"
+              || payload.tool_name === "mcp__brainbase__brainbase_judgment_audit_read"
               ? {} : { systemMessage: "Brainbase lifecycle recorded" })
             : {
               schema_version: "brainbase-judgment-final-v1",
@@ -1224,6 +1225,7 @@ describe("Brainbase judgment Hook forwarder", () => {
       },
     };
     const stateInput = { state: "completed", reason: "reply finalized" };
+    const auditInput = { turn_ref: resolveInput.turn_ref };
     await appendFile(transcriptPath, [
       {
         type: "assistant",
@@ -1267,6 +1269,20 @@ describe("Brainbase judgment Hook forwarder", () => {
           content: [{ type: "text", text: "recorded" }],
         }] },
       },
+      {
+        type: "assistant",
+        message: { content: [{
+          type: "tool_use", id: "audit-read-1",
+          name: "mcp__brainbase__brainbase_judgment_audit_read", input: auditInput,
+        }] },
+      },
+      {
+        type: "user", toolUseResult: "audited",
+        message: { content: [{
+          type: "tool_result", tool_use_id: "audit-read-1",
+          content: [{ type: "text", text: "audited" }],
+        }] },
+      },
     ].map((record) => `${JSON.stringify(record)}\n`).join(""));
 
     const answer = "🧠 判断参照: 「依頼」を参照 → 対応 ✓\n📚 Brainbase未参照: 今回は検索不要 ✓\n本文";
@@ -1276,9 +1292,9 @@ describe("Brainbase judgment Hook forwarder", () => {
     }, env);
     expect(stopped.code).toBe(0);
     const replayed = forwarded.filter((payload) => payload.hook_event_name === "PostToolUse");
-    expect(replayed).toHaveLength(2);
+    expect(replayed).toHaveLength(3);
     expect(replayed.map((payload) => payload.tool_use_id)).toEqual([
-      "resolve-turn-1", "state-record-1",
+      "resolve-turn-1", "state-record-1", "audit-read-1",
     ]);
     expect(replayed[0]).toMatchObject({
       tool_name: "mcp__brainbase__brainbase_resolve_turn",
@@ -1290,6 +1306,11 @@ describe("Brainbase judgment Hook forwarder", () => {
       tool_input: stateInput,
       tool_response: { content: [{ type: "text", text: "recorded" }] },
     });
+    expect(replayed[2]).toMatchObject({
+      tool_name: "mcp__brainbase__brainbase_judgment_audit_read",
+      tool_input: auditInput,
+      tool_response: { content: [{ type: "text", text: "audited" }] },
+    });
     expect(forwarded.some((payload) => payload.tool_use_id === "task-write-1")).toBe(false);
 
     const repeated = await runHook({
@@ -1297,7 +1318,224 @@ describe("Brainbase judgment Hook forwarder", () => {
       last_assistant_message: answer,
     }, env);
     expect(repeated.code).toBe(0);
-    expect(forwarded.filter((payload) => payload.hook_event_name === "PostToolUse")).toHaveLength(2);
+    expect(forwarded.filter((payload) => payload.hook_event_name === "PostToolUse")).toHaveLength(3);
+  });
+
+  it("replays a failed lifecycle tool as PostToolUseFailure without completing resolve_turn", async () => {
+    const forwarded: Array<Record<string, unknown>> = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(chunk as Buffer);
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      forwarded.push(payload);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        schema_version: "1", accepted: true,
+        hook_event_name: payload.hook_event_name, session_id: payload.session_id,
+        turn_id: payload.turn_id, receipt_id: `receipt-failed-${forwarded.length}`,
+        ...(payload.hook_event_name === "UserPromptSubmit"
+          ? { route_resolution_sha256: "d".repeat(64) } : {}),
+        output: payload.hook_event_name === "UserPromptSubmit"
+          ? { hookSpecificOutput: {
+            hookEventName: "UserPromptSubmit", additionalContext: "Judgment route resolved",
+          } }
+          : payload.hook_event_name === "PostToolUseFailure"
+            ? { systemMessage: "Brainbase lifecycle failure recorded" }
+            : {
+              schema_version: "brainbase-judgment-final-v1",
+              completion_status: "complete",
+              answer_digest: createHash("sha256")
+                .update(String(payload.last_assistant_message ?? ""))
+                .digest("hex"),
+            },
+      }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanup.push(async () => new Promise<void>((resolve) => server.close(() => resolve())));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test_server_missing");
+    const stateDir = await mkdtemp(join(tmpdir(), "mana-judgment-hook-"));
+    cleanup.push(() => rm(stateDir, { recursive: true, force: true }));
+    const transcriptPath = join(stateDir, "transcript.jsonl");
+    await writeFile(transcriptPath, `${JSON.stringify({ type: "user", message: { content: [] } })}\n`);
+    const env = {
+      BRAINBASE_JUDGMENT_HOOK_URL: `http://127.0.0.1:${address.port}/host/judgment/hook`,
+      BRAINBASE_JUDGMENT_TURN_DIR: stateDir,
+    };
+    const sessionId = "session-transcript-failed-replay";
+    expect((await runHook({
+      hook_event_name: "UserPromptSubmit", session_id: sessionId, transcript_path: transcriptPath,
+    }, env)).code).toBe(0);
+
+    const resolveInput = { turn_ref: `${"e".repeat(64)}/${"f".repeat(64)}` };
+    await appendFile(transcriptPath, [
+      {
+        type: "assistant",
+        message: { content: [{
+          type: "tool_use", id: "resolve-turn-failed",
+          name: "mcp__brainbase__brainbase_resolve_turn", input: resolveInput,
+        }] },
+      },
+      {
+        type: "user",
+        message: { content: [{
+          type: "tool_result", tool_use_id: "resolve-turn-failed",
+          content: [{ type: "text", text: "upstream failure" }], is_error: true,
+        }] },
+      },
+    ].map((record) => `${JSON.stringify(record)}\n`).join(""));
+
+    const answer = "🧠 判断参照: 「依頼」を参照 → 対応 ✓\n📚 Brainbase未参照: 今回は検索不要 ✓\n本文";
+    const stopped = await runHook({
+      hook_event_name: "Stop", session_id: sessionId, transcript_path: transcriptPath,
+      last_assistant_message: answer,
+    }, env);
+    expect(stopped.code).toBe(0);
+    const failedReplay = forwarded.filter((payload) => payload.hook_event_name === "PostToolUseFailure");
+    expect(failedReplay).toHaveLength(1);
+    expect(failedReplay[0]).toMatchObject({
+      tool_use_id: "resolve-turn-failed",
+      tool_name: "mcp__brainbase__brainbase_resolve_turn",
+      tool_input: resolveInput,
+      tool_response: { content: [{ type: "text", text: "upstream failure" }] },
+    });
+    expect(forwarded.some((payload) => payload.tool_use_id === "resolve-turn-failed"
+      && payload.hook_event_name === "PostToolUse")).toBe(false);
+
+    const blocked = await runHook({
+      hook_event_name: "PreToolUse", session_id: sessionId,
+      tool_use_id: "after-failed-resolve", tool_name: "mcp__brainbase__brainbase_knowledge_resolve",
+    }, env);
+    expect(blocked.code).toBe(2);
+    expect(blocked.stderr).toContain("judgment_resolve_turn_required_first");
+
+    const repeated = await runHook({
+      hook_event_name: "Stop", session_id: sessionId, transcript_path: transcriptPath,
+      last_assistant_message: answer,
+    }, env);
+    expect(repeated.code).toBe(0);
+    expect(forwarded.filter((payload) => payload.hook_event_name === "PostToolUseFailure")).toHaveLength(1);
+  });
+
+  it("skips only an exact locally denied failed lifecycle call and conflicts on identity or result changes", async () => {
+    const forwarded: Array<Record<string, unknown>> = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(chunk as Buffer);
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      forwarded.push(payload);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        schema_version: "1", accepted: true,
+        hook_event_name: payload.hook_event_name, session_id: payload.session_id,
+        turn_id: payload.turn_id, receipt_id: `receipt-denial-${forwarded.length}`,
+        ...(payload.hook_event_name === "UserPromptSubmit"
+          ? { route_resolution_sha256: "e".repeat(64) } : {}),
+        output: payload.hook_event_name === "UserPromptSubmit"
+          ? { hookSpecificOutput: {
+            hookEventName: "UserPromptSubmit", additionalContext: "Judgment route resolved",
+          } }
+          : payload.hook_event_name === "PostToolUse"
+            || payload.hook_event_name === "PostToolUseFailure"
+            ? (payload.tool_name === "mcp__brainbase__brainbase_judgment_state_record"
+              || payload.tool_name === "mcp__brainbase__brainbase_judgment_audit_read"
+              ? {} : { systemMessage: "Brainbase lifecycle recorded" })
+            : {
+              schema_version: "brainbase-judgment-final-v1",
+              completion_status: "complete",
+              answer_digest: createHash("sha256")
+                .update(String(payload.last_assistant_message ?? ""))
+                .digest("hex"),
+            },
+      }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanup.push(async () => new Promise<void>((resolve) => server.close(() => resolve())));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test_server_missing");
+    const stateDir = await mkdtemp(join(tmpdir(), "mana-judgment-hook-"));
+    cleanup.push(() => rm(stateDir, { recursive: true, force: true }));
+    const transcriptPath = join(stateDir, "transcript.jsonl");
+    await writeFile(transcriptPath, `${JSON.stringify({ type: "user", message: { content: [] } })}\n`);
+    const env = {
+      BRAINBASE_JUDGMENT_HOOK_URL: `http://127.0.0.1:${address.port}/host/judgment/hook`,
+      BRAINBASE_JUDGMENT_TURN_DIR: stateDir,
+    };
+    const sessionId = "session-transcript-pretool-denial";
+    expect((await runHook({
+      hook_event_name: "UserPromptSubmit", session_id: sessionId, transcript_path: transcriptPath,
+    }, env)).code).toBe(0);
+
+    const deniedId = "state-record-denied";
+    const deniedName = "mcp__brainbase__brainbase_judgment_state_record";
+    const denied = await runHook({
+      hook_event_name: "PreToolUse", session_id: sessionId,
+      tool_use_id: deniedId, tool_name: deniedName,
+    }, env);
+    expect(denied.code).toBe(2);
+    expect(denied.stderr).toContain("judgment_resolve_turn_required_first");
+    await appendFile(transcriptPath, [
+      {
+        type: "assistant",
+        message: { content: [{
+          type: "tool_use", id: deniedId, name: deniedName, input: { state: "completed" },
+        }] },
+      },
+      {
+        type: "user",
+        message: { content: [{
+          type: "tool_result", tool_use_id: deniedId,
+          content: [{ type: "text", text: "denied" }], is_error: true,
+        }] },
+      },
+    ].map((record) => `${JSON.stringify(record)}\n`).join(""));
+
+    const stopped = await runHook({
+      hook_event_name: "Stop", session_id: sessionId, transcript_path: transcriptPath,
+      last_assistant_message: "🧠 判断参照: 「依頼」を参照 → 対応 ✓\n📚 Brainbase未参照: 今回は検索不要 ✓\n本文",
+    }, env);
+    expect(stopped.code).toBe(0);
+    expect(forwarded.some((payload) => payload.tool_use_id === deniedId)).toBe(false);
+    expect(forwarded.filter((payload) => payload.hook_event_name === "Stop")).toHaveLength(1);
+
+    const conflictDir = await mkdtemp(join(tmpdir(), "mana-judgment-hook-"));
+    cleanup.push(() => rm(conflictDir, { recursive: true, force: true }));
+    const conflictTranscriptPath = join(conflictDir, "transcript.jsonl");
+    await writeFile(conflictTranscriptPath, `${JSON.stringify({ type: "user", message: { content: [] } })}\n`);
+    const conflictSessionId = "session-transcript-pretool-conflict";
+    expect((await runHook({
+      hook_event_name: "UserPromptSubmit", session_id: conflictSessionId,
+      transcript_path: conflictTranscriptPath,
+    }, { ...env, BRAINBASE_JUDGMENT_TURN_DIR: conflictDir })).code).toBe(0);
+    const conflictId = "state-record-conflict";
+    expect((await runHook({
+      hook_event_name: "PreToolUse", session_id: conflictSessionId,
+      tool_use_id: conflictId, tool_name: deniedName,
+    }, { ...env, BRAINBASE_JUDGMENT_TURN_DIR: conflictDir })).code).toBe(2);
+    await appendFile(conflictTranscriptPath, [
+      {
+        type: "assistant",
+        message: { content: [{
+          type: "tool_use", id: conflictId,
+          name: "mcp__brainbase__brainbase_judgment_audit_read", input: {},
+        }] },
+      },
+      {
+        type: "user",
+        message: { content: [{
+          type: "tool_result", tool_use_id: conflictId,
+          content: [{ type: "text", text: "unexpected success" }],
+        }] },
+      },
+    ].map((record) => `${JSON.stringify(record)}\n`).join(""));
+    const conflict = await runHook({
+      hook_event_name: "Stop", session_id: conflictSessionId,
+      transcript_path: conflictTranscriptPath,
+      last_assistant_message: "🧠 判断参照: 「依頼」を参照 → 対応 ✓\n📚 Brainbase未参照: 今回は検索不要 ✓\n本文",
+    }, { ...env, BRAINBASE_JUDGMENT_TURN_DIR: conflictDir });
+    expect(conflict.code).toBe(2);
+    expect(conflict.stderr).toContain("judgment_hook_pretool_denial_conflict");
+    expect(forwarded.some((payload) => payload.tool_use_id === conflictId)).toBe(false);
   });
 
   it("fails closed before Stop when the current transcript is malformed", async () => {

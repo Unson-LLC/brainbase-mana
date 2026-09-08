@@ -188,6 +188,7 @@ describe("Company Authority sandbox proxy guard", () => {
         allowedTools: [
           "brainbase_resolve_turn",
           "brainbase_judgment_state_record",
+          "brainbase_judgment_audit_read",
           "brainbase_knowledge_resolve",
         ],
         companyAuthorityResponse: { schema_version: "1.0", authority: { decision: "auto" } },
@@ -216,6 +217,7 @@ describe("Company Authority sandbox proxy guard", () => {
         allowedTools: [
           "brainbase_resolve_turn",
           "brainbase_judgment_state_record",
+          "brainbase_judgment_audit_read",
           "brainbase_knowledge_resolve",
         ],
         companyAuthorityResponse: undefined,
