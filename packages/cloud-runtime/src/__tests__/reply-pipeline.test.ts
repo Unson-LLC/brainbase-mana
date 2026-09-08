@@ -1231,8 +1231,8 @@ describe("TechKnight Slack reply pipeline", () => {
     expect(prompt).toContain("search_tasks");
     expect(prompt).toContain("has_more");
     expect(prompt).toContain("API障害");
-    expect(replySettings.hooks.PostToolUse[0].matcher).toBe(".*");
-    expect(replySettings.hooks.PostToolUseFailure[0].matcher).toBe(".*");
+    expect(replySettings.hooks.PostToolUse[0].matcher).toBe("^mcp__brainbase__.*");
+    expect(replySettings.hooks.PostToolUseFailure[0].matcher).toBe("^mcp__brainbase__.*");
     expect(mcpConfig).toBe(JSON.stringify({
       mcpServers: {
         brainbase: {
@@ -1583,6 +1583,60 @@ describe("TechKnight Slack reply pipeline", () => {
       errorSummary: "failed with [redacted]",
     }));
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("sk-ant-secret-value");
+    errorSpy.mockRestore();
+  });
+
+  it("records bounded Hook output diagnostics while preserving the parser failure", async () => {
+    const fs = new MemoryFs();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const secretCanary = "raw-hook-output-secret-must-not-leak";
+    const lines = auditedReplyStream().split("\n");
+    const promptIndex = lines.findIndex((line) => line.includes('"hook_event":"UserPromptSubmit"'));
+    const prompt = JSON.parse(lines[promptIndex]!) as Record<string, unknown>;
+    prompt.stdout = secretCanary;
+    prompt.output = [secretCanary];
+    lines[promptIndex] = JSON.stringify(prompt);
+    const { options, sandbox } = harness();
+    sandbox.exec.mockResolvedValueOnce({
+      success: true,
+      stdout: lines.join("\n"),
+      stderr: "",
+      exitCode: 0,
+    });
+
+    await expect(processReplyEvent(fs, event(), options)).rejects.toEqual(
+      expect.objectContaining<Partial<ReplyPipelineError>>({
+        code: "reply_judgment_hook_output_invalid",
+        hookOutputDiagnostics: {
+          schemaVersion: "reply_judgment_hook_output_diagnostics.v1",
+          scope: "hook_output",
+          hookEvent: "UserPromptSubmit",
+          stdoutKind: "invalid_json",
+          outputKind: "array",
+        },
+      }),
+    );
+
+    for (const logEvent of ["mana_claude_failed", "mana_reply_failed"]) {
+      expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({
+        event: logEvent,
+        reasonCode: "reply_judgment_hook_output_invalid",
+        hookOutputDiagnostics: {
+          schemaVersion: "reply_judgment_hook_output_diagnostics.v1",
+          scope: "hook_output",
+          hookEvent: "UserPromptSubmit",
+          stdoutKind: "invalid_json",
+          outputKind: "array",
+        },
+      }));
+    }
+    const episode = JSON.parse(fs.files.get("/judgment-episodes/EvReply123.json")!);
+    expect(episode.attempts).toMatchObject([{
+      status: "failed",
+      failureCode: "reply_judgment_hook_output_invalid",
+    }]);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(secretCanary);
+    expect(JSON.stringify(episode)).not.toContain(secretCanary);
     errorSpy.mockRestore();
   });
 

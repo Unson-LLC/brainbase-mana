@@ -33,6 +33,16 @@ interface StreamEvent extends Record<string, unknown> {
   message?: { content?: unknown };
 }
 
+const REPLY_JUDGMENT_HOOK_EVENT_NAMES = [
+  "UserPromptSubmit",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "Stop",
+] as const;
+
+type ReplyJudgmentHookEventName = typeof REPLY_JUDGMENT_HOOK_EVENT_NAMES[number];
+type ReplyJudgmentHookEventNameDiagnostic = ReplyJudgmentHookEventName | "unknown";
+
 interface CliPermissionDenial {
   toolUseId: string;
   toolName: string;
@@ -40,7 +50,7 @@ interface CliPermissionDenial {
 
 interface EmbeddedHookReceipt {
   schema_version: "mana_judgment_hook_receipt.v1";
-  hook_event_name: "UserPromptSubmit" | "PostToolUse" | "PostToolUseFailure" | "Stop";
+  hook_event_name: ReplyJudgmentHookEventName;
   session_id: string;
   turn_id: string;
   host_receipt_id?: string;
@@ -77,10 +87,37 @@ export interface ReplyJudgmentAuditDiagnostics {
   toolNameMismatchCount: number;
 }
 
+export type ReplyJudgmentHookOutputKind =
+  | "missing"
+  | "empty"
+  | "invalid_json"
+  | "json_object"
+  | "json_non_object"
+  | "object"
+  | "array"
+  | "null"
+  | "primitive";
+
+/**
+ * Content-free diagnostics for a Hook response that cannot be parsed.
+ *
+ * Only the allowlisted event name and finite value kinds are retained. The
+ * response body, arbitrary response keys, and any identifiers stay out of
+ * logs and persisted failure state.
+ */
+export interface ReplyJudgmentHookOutputDiagnostics {
+  schemaVersion: "reply_judgment_hook_output_diagnostics.v1";
+  scope: "hook_output";
+  hookEvent: ReplyJudgmentHookEventNameDiagnostic;
+  stdoutKind: ReplyJudgmentHookOutputKind;
+  outputKind: ReplyJudgmentHookOutputKind;
+}
+
 export class ReplyJudgmentParseError extends Error {
   constructor(
     message: string,
     readonly auditDiagnostics?: ReplyJudgmentAuditDiagnostics,
+    readonly hookOutputDiagnostics?: ReplyJudgmentHookOutputDiagnostics,
   ) {
     super(message);
     this.name = "ReplyJudgmentParseError";
@@ -91,6 +128,12 @@ export function getReplyJudgmentAuditDiagnostics(
   error: unknown,
 ): ReplyJudgmentAuditDiagnostics | undefined {
   return error instanceof ReplyJudgmentParseError ? error.auditDiagnostics : undefined;
+}
+
+export function getReplyJudgmentHookOutputDiagnostics(
+  error: unknown,
+): ReplyJudgmentHookOutputDiagnostics | undefined {
+  return error instanceof ReplyJudgmentParseError ? error.hookOutputDiagnostics : undefined;
 }
 
 export interface ReplyJudgmentResult {
@@ -287,6 +330,47 @@ function contentItems(event: StreamEvent): Array<Record<string, unknown>> {
     : [];
 }
 
+function hookOutputKind(value: unknown): ReplyJudgmentHookOutputKind {
+  if (value === undefined) return "missing";
+  if (value === null) return "null";
+  if (typeof value === "string") {
+    if (!value.trim()) return "empty";
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? "json_object"
+        : "json_non_object";
+    } catch {
+      return "invalid_json";
+    }
+  }
+  if (Array.isArray(value)) return "array";
+  if (typeof value === "object") return "object";
+  return "primitive";
+}
+
+function hookEventName(value: unknown): ReplyJudgmentHookEventNameDiagnostic {
+  return typeof value === "string"
+    && (REPLY_JUDGMENT_HOOK_EVENT_NAMES as readonly string[]).includes(value)
+    ? value as ReplyJudgmentHookEventName
+    : "unknown";
+}
+
+function hookOutputDiagnostics(event: StreamEvent): ReplyJudgmentHookOutputDiagnostics | undefined {
+  try {
+    return {
+      schemaVersion: "reply_judgment_hook_output_diagnostics.v1",
+      scope: "hook_output",
+      hookEvent: hookEventName(event.hook_event),
+      stdoutKind: hookOutputKind(event.stdout),
+      outputKind: hookOutputKind(event.output),
+    };
+  } catch {
+    // Diagnostics must never replace the original parser failure.
+    return undefined;
+  }
+}
+
 function parseHookOutput(event: StreamEvent): Record<string, unknown> {
   for (const candidate of [event.stdout, event.output]) {
     if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
@@ -298,7 +382,11 @@ function parseHookOutput(event: StreamEvent): Record<string, unknown> {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
     } catch { /* try the next representation */ }
   }
-  throw new Error("reply_judgment_hook_output_invalid");
+  throw new ReplyJudgmentParseError(
+    "reply_judgment_hook_output_invalid",
+    undefined,
+    hookOutputDiagnostics(event),
+  );
 }
 
 function hookReceipt(event: StreamEvent): { output: Record<string, unknown>; receipt: EmbeddedHookReceipt } {
