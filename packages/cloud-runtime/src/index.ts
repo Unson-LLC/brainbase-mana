@@ -2610,7 +2610,8 @@ export async function executeCompanyAuthorityReplyOperation(
                 }
                 // Resolve the bot identity using the same tenant-bound credential
                 // that will send and read back the message, never a global token.
-                const authResponse = await credentialFetch("https://slack.com/api/auth.test");
+                const authResponse = await boundary("slack_delivery", () =>
+                  brokerFetch("https://slack.com/api/auth.test", { method: "POST" }));
                 const auth = await authResponse.json() as { ok?: unknown; team_id?: unknown; bot_id?: unknown };
                 if (!authResponse.ok || auth.ok !== true
                   || auth.team_id !== activeTenantContext.workspace_connection.workspace_id

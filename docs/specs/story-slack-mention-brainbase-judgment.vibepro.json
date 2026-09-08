@@ -58,7 +58,7 @@
     {
       "id": "INV-002",
       "type": "invariant",
-      "statement": "既存の議事録Judgment、proxy認証、placement認可、thread返信、Queue retryを退行させない",
+      "statement": "既存の議事録Judgment、proxy認証、placement認可、thread返信、Queue retryを退行させない。返信前のbot本人確認は同じtenant credentialで許可済みslack.auth.test.postを使う",
       "origin": {
         "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-9" }],
         "architecture_refs": [{ "file": "docs/architecture/story-slack-mention-brainbase-judgment.md", "section": "既存経路との互換性" }],
