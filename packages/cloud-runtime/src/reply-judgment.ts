@@ -695,6 +695,11 @@ export function parseReplyJudgmentStream(stdout: string): ReplyJudgmentResult {
   const authenticatedToolHooks = [...brainbaseIdentityBoundHooks];
   const emittedToolUseIds = new Set(authenticatedToolHooks.map((hook) => hook.receipt.tool_use_id));
   for (const hook of stopJournalHooks) {
+    // Stop receipts authenticate every Brainbase call, including lifecycle
+    // controls. Only source-evidence receipts participate in the PostTool
+    // binding count and journal; lifecycle receipts are checked above but do
+    // not represent a source read.
+    if (!isBrainbaseEvidenceTool(hook.receipt.tool_name!)) continue;
     if (!emittedToolUseIds.has(hook.receipt.tool_use_id)) authenticatedToolHooks.push(hook);
   }
   const hostVerifiedAnswer = verifiedAnswer(successfulStop.output);
