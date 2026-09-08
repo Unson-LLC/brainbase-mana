@@ -3,6 +3,7 @@ import {
   completeReplyJudgmentAttempt,
   failReplyJudgmentAttempt,
   getReplyJudgmentAuditDiagnostics,
+  getReplyJudgmentHookOutputDiagnostics,
   isReplyJudgmentCompleted,
   parseReplyJudgmentStream,
   readReplyJudgmentEpisode,
@@ -231,6 +232,85 @@ describe("Slack reply Judgment lifecycle", () => {
     });
     expect(() => parseReplyJudgmentStream(failedHook))
       .toThrow("reply_judgment_hook_failed_judgment_hook_http_401");
+  });
+
+  it.each([
+    {
+      name: "invalid stdout and array output at UserPromptSubmit",
+      hookEvent: "UserPromptSubmit" as const,
+      streamOptions: {},
+      stdout: "raw-hook-output-secret",
+      output: ["raw-hook-output-secret"],
+      stdoutKind: "invalid_json",
+      outputKind: "array",
+    },
+    {
+      name: "missing stdout and empty output at PostToolUse",
+      hookEvent: "PostToolUse" as const,
+      streamOptions: { withTool: true },
+      stdout: undefined,
+      output: "",
+      stdoutKind: "missing",
+      outputKind: "empty",
+    },
+    {
+      name: "null stdout and JSON non-object output at PostToolUseFailure",
+      hookEvent: "PostToolUseFailure" as const,
+      streamOptions: { withTool: true, toolErrors: [true] },
+      stdout: null,
+      output: "[]",
+      stdoutKind: "null",
+      outputKind: "json_non_object",
+    },
+    {
+      name: "primitive stdout and output at Stop",
+      hookEvent: "Stop" as const,
+      streamOptions: {},
+      stdout: 7,
+      output: false,
+      stdoutKind: "primitive",
+      outputKind: "primitive",
+    },
+  ])("classifies $name without exposing Hook output", (testCase) => {
+    const lines = stream(testCase.streamOptions).split("\n");
+    const hookIndex = lines.findIndex((line) => line.includes(`"hook_event":"${testCase.hookEvent}"`));
+    const hookResponse = JSON.parse(lines[hookIndex]!) as Record<string, unknown>;
+    hookResponse.stdout = testCase.stdout;
+    hookResponse.output = testCase.output;
+    lines[hookIndex] = JSON.stringify(hookResponse);
+
+    let thrown: unknown;
+    try {
+      parseReplyJudgmentStream(lines.join("\n"));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({ message: "reply_judgment_hook_output_invalid" });
+    expect(getReplyJudgmentHookOutputDiagnostics(thrown)).toEqual({
+      schemaVersion: "reply_judgment_hook_output_diagnostics.v1",
+      scope: "hook_output",
+      hookEvent: testCase.hookEvent,
+      stdoutKind: testCase.stdoutKind,
+      outputKind: testCase.outputKind,
+    });
+    expect(JSON.stringify(getReplyJudgmentHookOutputDiagnostics(thrown)))
+      .not.toContain("raw-hook-output-secret");
+  });
+
+  it("falls back to a valid output when stdout is invalid JSON", () => {
+    const lines = stream().split("\n");
+    const promptIndex = lines.findIndex((line) => line.includes('"hook_event":"UserPromptSubmit"'));
+    const prompt = JSON.parse(lines[promptIndex]!) as Record<string, unknown>;
+    prompt.output = prompt.stdout;
+    prompt.stdout = "invalid-hook-stdout";
+    lines[promptIndex] = JSON.stringify(prompt);
+
+    expect(parseReplyJudgmentStream(lines.join("\n"))).toMatchObject({
+      reply: `${judgmentLine}\n${zeroCallLine}\n回答本文`,
+      userPromptSubmit: "completed",
+      stop: "completed",
+    });
   });
 
   it("ignores an exact CLI-owned PreToolUse denial when the model recovers into a fully audited lifecycle", () => {

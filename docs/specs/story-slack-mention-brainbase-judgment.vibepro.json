@@ -32,7 +32,7 @@
     {
       "id": "C-002",
       "type": "contract",
-      "statement": "event、workspace、channel、thread、Claude session、Brainbase turn、route、tool journal、Stop、response_tsを本文とsecretなしの永続episode receiptへ結合する",
+      "statement": "event、workspace、channel、thread、Claude session、Brainbase turn、route、tool journal、Stop、response_tsを本文とsecretなしの永続episode receiptへ結合する。PostToolUse/FailureはBrainbase MCPだけに限定し、PreToolUseの全tool先行ゲートとStop監査は維持する。Hook出力の解釈失敗は元の失敗コードを保持し、Hook段階とstdout/outputの有限な型分類だけを診断へ残す。本文・任意キー・秘密値を診断へ含めない",
       "origin": {
         "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-7" }],
         "architecture_refs": [{ "file": "docs/architecture/story-slack-mention-brainbase-judgment.md", "section": "Episode receipt" }],

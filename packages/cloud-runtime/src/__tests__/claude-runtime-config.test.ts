@@ -157,9 +157,18 @@ describe("Cloudflare Claude runtime config", () => {
     expect(Object.keys(settings.hooks)).toEqual([
       "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop",
     ]);
+    expect(settings.hooks.UserPromptSubmit?.[0]?.matcher).toBeUndefined();
     expect(settings.hooks.PreToolUse?.[0]?.matcher).toBe(".*");
-    expect(settings.hooks.PostToolUse?.[0]?.matcher).toBe(".*");
-    expect(settings.hooks.PostToolUseFailure?.[0]?.matcher).toBe(".*");
+    expect(settings.hooks.PostToolUse?.[0]?.matcher).toBe("^mcp__brainbase__.*");
+    expect(settings.hooks.PostToolUseFailure?.[0]?.matcher).toBe("^mcp__brainbase__.*");
+    expect(settings.hooks.Stop?.[0]?.matcher).toBeUndefined();
+    for (const eventName of ["PostToolUse", "PostToolUseFailure"] as const) {
+      const matcher = new RegExp(settings.hooks[eventName]?.[0]?.matcher ?? "");
+      expect(matcher.test("mcp__brainbase__brainbase_resolve_turn")).toBe(true);
+      expect(matcher.test("mcp__brainbase__brainbase_knowledge_resolve")).toBe(true);
+      expect(matcher.test("mcp__other__unrelated_tool")).toBe(false);
+      expect(matcher.test("Bash")).toBe(false);
+    }
     expect(JSON.parse(runtimeReplySettingsContent())).toEqual(settings);
     for (const eventName of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop"] as const) {
       expect(settings.hooks[eventName]?.[0]?.hooks).toEqual([

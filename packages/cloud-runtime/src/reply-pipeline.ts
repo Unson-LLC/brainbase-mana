@@ -36,10 +36,12 @@ import {
   completeReplyJudgmentAttempt,
   failReplyJudgmentAttempt,
   getReplyJudgmentAuditDiagnostics,
+  getReplyJudgmentHookOutputDiagnostics,
   isReplyJudgmentCompleted,
   parseReplyJudgmentStream,
   startReplyJudgmentAttempt,
   type ReplyJudgmentAuditDiagnostics,
+  type ReplyJudgmentHookOutputDiagnostics,
   type ReplyJudgmentResult,
 } from "./reply-judgment.js";
 import {
@@ -255,7 +257,11 @@ export interface ReplyProcessFailedResult {
 export type ReplyProcessResult = ReplyProcessSuccessResult | ReplyProcessFailedResult;
 
 export class ReplyPipelineError extends Error {
-  constructor(readonly code: string, readonly auditDiagnostics?: ReplyJudgmentAuditDiagnostics) {
+  constructor(
+    readonly code: string,
+    readonly auditDiagnostics?: ReplyJudgmentAuditDiagnostics,
+    readonly hookOutputDiagnostics?: ReplyJudgmentHookOutputDiagnostics,
+  ) {
     super(code);
     this.name = "ReplyPipelineError";
   }
@@ -280,6 +286,17 @@ function safeFailureCode(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0
     ? value.replace(/[^a-z0-9_.-]/gi, "_").slice(0, 80)
     : fallback;
+}
+
+function safeReplyJudgmentHookOutputDiagnostics(
+  error: unknown,
+): ReplyJudgmentHookOutputDiagnostics | undefined {
+  try {
+    return getReplyJudgmentHookOutputDiagnostics(error);
+  } catch {
+    // A diagnostic failure must not replace the original judgment failure.
+    return undefined;
+  }
 }
 
 async function deliverAuditFailureNotice(
@@ -773,10 +790,12 @@ export async function generateClaudeReply(
             ? retryError.message
             : "reply_judgment_stream_invalid";
           const retryAuditDiagnostics = getReplyJudgmentAuditDiagnostics(retryError);
+          const retryHookOutputDiagnostics = safeReplyJudgmentHookOutputDiagnostics(retryError);
           emitTurnLog("error", "mana_claude_failed", event, trace, {
             outcome: "error", reasonCode: retryCode,
             toolFailures: replyToolFailureDiagnostics(result.stdout),
             ...(retryAuditDiagnostics ? { auditDiagnostics: retryAuditDiagnostics } : {}),
+            ...(retryHookOutputDiagnostics ? { hookOutputDiagnostics: retryHookOutputDiagnostics } : {}),
             ...(result.stderr.trim()
               ? {
                 errorSummary: safeExecutionErrorSummary(result.stderr),
@@ -787,14 +806,16 @@ export async function generateClaudeReply(
               : {}),
             durationMs: Date.now() - startedAt,
           });
-          throw new ReplyPipelineError(retryCode, retryAuditDiagnostics);
+          throw new ReplyPipelineError(retryCode, retryAuditDiagnostics, retryHookOutputDiagnostics);
         }
       } else {
+        const hookOutputDiagnostics = safeReplyJudgmentHookOutputDiagnostics(error);
         emitTurnLog("error", "mana_claude_failed", event, trace, {
           outcome: "error",
           reasonCode: code,
           toolFailures: replyToolFailureDiagnostics(result.stdout),
           ...(auditDiagnostics ? { auditDiagnostics } : {}),
+          ...(hookOutputDiagnostics ? { hookOutputDiagnostics } : {}),
           ...(result.stderr.trim()
             ? {
               errorSummary: safeExecutionErrorSummary(result.stderr),
@@ -805,7 +826,7 @@ export async function generateClaudeReply(
             : {}),
           durationMs: Date.now() - startedAt,
         });
-        throw new ReplyPipelineError(code, auditDiagnostics);
+        throw new ReplyPipelineError(code, auditDiagnostics, hookOutputDiagnostics);
       }
     }
     const reply = normalizeReply(judgment.reply);
@@ -1201,6 +1222,8 @@ export async function processReplyEvent(
         ...(error instanceof TenantBoundaryError ? { boundary: error.boundary } : {}),
         ...(error instanceof ReplyPipelineError && error.auditDiagnostics
           ? { auditDiagnostics: error.auditDiagnostics } : {}),
+        ...(error instanceof ReplyPipelineError && error.hookOutputDiagnostics
+          ? { hookOutputDiagnostics: error.hookOutputDiagnostics } : {}),
         ...(failureCode === "reply_judgment_attempt_failed" && error instanceof Error
           ? { errorSummary: safeExecutionErrorSummary(error.message) }
           : {}),
