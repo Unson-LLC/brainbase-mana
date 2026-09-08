@@ -661,6 +661,65 @@ describe("Company Authority runtime.execute reply executor", () => {
     expect(runtimeMocks.workspaceStub.completeRuntimeEvent).toHaveBeenCalledOnce();
   });
 
+  it("routes intake through child ownership while preserving the ordinary reply owner", async () => {
+    runtimeMocks.resolveSlackWorkerIngress.mockImplementation(async ({ identity }) => ({
+      tenant_context: { ...tenantContext(), slack: { ...tenantContext().slack, event_id: identity.event_id } },
+      authoritative_snapshot: snapshot,
+    }));
+    const ordinaryRuntime = runtimeMocks.executeReplyRuntime.getMockImplementation()!;
+    runtimeMocks.executeReplyRuntime.mockImplementationOnce(async (input: Record<string, unknown>) => {
+      const fetch = (input.options as { fetch: typeof globalThis.fetch }).fetch;
+      for (const [path, body] of [
+        ["reactions.add", { channel: channelId, timestamp: event().messageTs, name: "eyes" }],
+        ["assistant.threads.setStatus", { channel_id: channelId, thread_ts: threadTs, status: "分析しています…" }],
+        ["assistant.threads.setStatus", { channel_id: channelId, thread_ts: threadTs, status: "" }],
+        ["reactions.remove", { channel: channelId, timestamp: event().messageTs, name: "eyes" }],
+      ] as const) {
+        await expect(fetch(`https://slack.com/api/${path}`, { method: "POST",
+          headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
+          .resolves.toBeInstanceOf(Response);
+      }
+      return ordinaryRuntime(input);
+    });
+    runtimeMocks.brokerFetch.mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      if (/\/(reactions\.(add|remove)|assistant\.threads\.setStatus)$/.test(new URL(request.url).pathname)) {
+        runtimeMocks.slackRequests.push({ request, body: await request.clone().json() });
+        return Response.json({ ok: true });
+      }
+      return brokerFetch(input, init);
+    });
+    await expect(executeCompanyAuthorityReplyOperation(runtimeEnv(), operation())).resolves.toMatchObject({ applied: true });
+    const ids = runtimeMocks.postTenantSlackReply.mock.calls.map(([input]) => input.effect_id);
+    expect(ids).toHaveLength(5);
+    expect(new Set(ids).size).toBe(5);
+    expect(ids).toContain("provider-key-1");
+    expect(ids.filter((id: string) => id.startsWith("reply-intake:"))).toHaveLength(4);
+    expect(runtimeMocks.slackRequests.filter(({ request }) => request.url.endsWith("chat.postMessage"))).toHaveLength(1);
+  });
+
+  it.each(["source", "child"])("rejects intake %s boundary drift before provider delivery", async (stage) => {
+    let calls = 0;
+    runtimeMocks.resolveSlackWorkerIngress.mockImplementation(async ({ identity }) => {
+      const context = tenantContext();
+      context.slack.event_id = identity.event_id;
+      if (++calls === (stage === "source" ? 1 : 2)) context.actor.principal_id = "different-person";
+      return { tenant_context: context, authoritative_snapshot: snapshot };
+    });
+    const ordinaryRuntime = runtimeMocks.executeReplyRuntime.getMockImplementation()!;
+    runtimeMocks.executeReplyRuntime.mockImplementationOnce(async (input: Record<string, unknown>) => {
+      const fetch = (input.options as { fetch: typeof globalThis.fetch }).fetch;
+      await expect(fetch("https://slack.com/api/reactions.add", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channel: channelId, timestamp: event().messageTs, name: "eyes" }),
+      })).rejects.toMatchObject({ code: "AUTHORITY_SCOPE_MISMATCH" });
+      return ordinaryRuntime(input);
+    });
+    await expect(executeCompanyAuthorityReplyOperation(runtimeEnv(), operation())).resolves.toMatchObject({ applied: true });
+    expect(runtimeMocks.postTenantSlackReply).toHaveBeenCalledOnce();
+    expect(runtimeMocks.slackRequests.some(({ request }) => request.url.includes("reactions.add"))).toBe(false);
+  });
+
   it("uses Slack's canonical response text for the strict readback hash", async () => {
     runtimeMocks.replyText = "🧠 ⚠️ 🛠️ 正規化前";
     runtimeMocks.postResponseText = ":brain: :warning: :hammer: 正規化後";
