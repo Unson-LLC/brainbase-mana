@@ -301,6 +301,10 @@ describe("TechKnight Slack reply pipeline", () => {
         processId: expect.stringMatching(/^reply-[0-9a-f-]{36}$/),
         autoCleanup: false,
         timeout: 540_000,
+        env: expect.objectContaining({
+          MCP_CONNECTION_NONBLOCKING: "0",
+          MCP_CONNECT_TIMEOUT_MS: "30000",
+        }),
       }),
     );
     expect(getStatus).toHaveBeenCalledTimes(2);
@@ -966,6 +970,8 @@ describe("TechKnight Slack reply pipeline", () => {
           MANA_TRACE_PLACEMENT_ID: undefined,
           MANA_TRACE_PROJECT_CODES: undefined,
           MANA_JUDGMENT_REQUEST: "メンションしてみる",
+          MCP_CONNECTION_NONBLOCKING: "0",
+          MCP_CONNECT_TIMEOUT_MS: "30000",
         },
       },
     );

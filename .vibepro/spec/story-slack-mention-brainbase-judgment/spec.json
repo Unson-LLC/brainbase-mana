@@ -316,6 +316,52 @@
       "confidence": 0.99,
       "first_seen_at": "2026-08-17T01:28:17.000Z",
       "last_revised_at": "2026-08-17T01:28:17.000Z"
+    },
+    {
+      "id": "INV-004",
+      "type": "invariant",
+      "statement": "通常replyのMCP初期化ではBrainbase stdio serverだけalwaysLoad:trueを設定し、返信ClaudeプロセスへMCP_CONNECTION_NONBLOCKING=0とMCP_CONNECT_TIMEOUT_MS=30000を渡す。Claude 2.1.195の約8秒遅延試験では両設定の併用でconnected状態と初回直接tool呼び出しの成功を確認した",
+      "origin": {
+        "architecture_refs": [
+          {
+            "file": "docs/architecture/story-slack-mention-brainbase-judgment.md",
+            "section": "データフロー"
+          }
+        ],
+        "code_refs": [
+          {
+            "file": "packages/cloud-runtime/src/runtime-mcp-config.ts"
+          },
+          {
+            "file": "packages/cloud-runtime/src/reply-pipeline.ts"
+          }
+        ],
+        "test_refs": [
+          {
+            "file": "packages/cloud-runtime/src/__tests__/runtime-mcp-config.test.ts",
+            "case": "exposes only the MCP servers declared by the placement"
+          },
+          {
+            "file": "packages/cloud-runtime/src/__tests__/reply-pipeline.test.ts",
+            "case": "posts a Claude response to the originating Slack thread"
+          }
+        ]
+      },
+      "verifiable_by": {
+        "test_pattern": [
+          {
+            "file_glob": "packages/cloud-runtime/src/__tests__/runtime-mcp-config.test.ts",
+            "must_cover": "exposes only the MCP servers declared by the placement"
+          },
+          {
+            "file_glob": "packages/cloud-runtime/src/__tests__/reply-pipeline.test.ts",
+            "must_cover": "posts a Claude response to the originating Slack thread"
+          }
+        ]
+      },
+      "confidence": 0.99,
+      "first_seen_at": "2026-09-08T05:32:19.000Z",
+      "last_revised_at": "2026-09-08T05:32:19.000Z"
     }
   ],
   "planned_test_suites": [
