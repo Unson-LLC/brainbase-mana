@@ -437,6 +437,12 @@ async function brokerFetch(input: RequestInfo | URL, init?: RequestInit): Promis
   runtimeMocks.slackRequests.push({ request, body });
   const path = new URL(request.url).pathname;
   if (path.endsWith("/auth.test")) {
+    // The production provider contract permits auth.test only as POST.
+    if (request.method !== "POST") {
+      throw Object.assign(new Error("Provider operation is not allowed"), {
+        code: "CREDENTIAL_LEASE_SCOPE_MISMATCH",
+      });
+    }
     return Response.json({ ok: true, team_id: workspaceId, bot_id: "B_UNSON" });
   }
   if (path.endsWith("/chat.postMessage")) {
