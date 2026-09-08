@@ -13,6 +13,7 @@
 - 初期の `company_read` 権限は個人KGの権限として使わない。外部ID・組織・本人・配置・期限・操作が一致した権限だけをBrainbaseへ渡す。
 - モデル引数にはowner・organization・authorityを含めない。登録項目はBrainbaseが永続化する項目に限定し、本文を必須とする。
 - 検索は空でないquery（最大4000文字）と整数limit（1〜50、既定10）を受ける。
+- 検索・登録ともPOSTのJSON本文に、その呼出しで取得した`company_authority_response`を含めて転送する。検索語はURLへ載せない。サービス経由の本人確認は署名付き権限で行い、人物IDのヘッダーだけでは代替しない。
 - 登録応答はevent ID・owner・organization・body hashを、検索応答は配列とevent IDを検証する。通信や権限の失敗を0件・登録成功へ変換しない。
 
 ## 反映と受入

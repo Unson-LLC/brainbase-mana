@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { signTaskWriteCapability } from "@openryoko/write-broker";
 import { createRuntimeGatewayProxyHandler } from "../runtime-gateway-proxy.js";
-import type { TenantContextEnvelope } from "../multitenancy/contracts.js";
+import type { CredentialLease, CredentialLeaseBinding, TenantContextEnvelope } from "../multitenancy/contracts.js";
+import { createBrainbaseTrustedProviderForwarderFromEnv } from "../multitenancy/trusted-provider-forwarder.js";
 
 const secret = "g".repeat(32);
 const placements = JSON.stringify([{ placementId: "mana-dev-biz", channelId: "C_MANA", channelName: "0240-mana-dev", projectCodes: ["mana"], taskWriteEnabled: true,
@@ -29,6 +30,15 @@ const personalTenantContext = {
   correlation_id: "corr-a", operation_id: "op-a", idempotency_key: "idem-a", contract_revision: "r1", credential: { mode: "cloud_standard", credential_ref: "ref-a", billing_principal_id: "person-a" },
   issued_at: "2026-09-06T00:00:00.000Z", expires_at: "2026-09-06T00:05:00.000Z", integrity: { method: "jws_detached", algorithm: "EdDSA", key_id: "key-a", value: "sig-a" },
 } as TenantContextEnvelope;
+const personalForwarderBinding: CredentialLeaseBinding = {
+  tenant_id: "tenant-a", connection_id: "conn-a", connection_revision: "r1", contract_revision: "r1",
+  operation_id: "op-a", audience: "brainbase.example.com", credential_mode: "cloud_standard", credential_ref: "ref-a",
+};
+const personalForwarderLease: CredentialLease = {
+  message_type: "credential_lease_response", protocol_version: "1.0", lease_id: "lease-a", contract_revision: "r1",
+  binding: personalForwarderBinding, issued_at: "2026-09-06T00:00:00.000Z", expires_at: "2026-09-06T00:05:00.000Z",
+  max_uses: 1, lease_token: "opaque-lease-token-a",
+};
 const personalRequest = async (tool: string, args: Record<string, unknown>, token = personalCapability()) => new Request("https://gateway.internal/api/runtime/gateway", {
   method: "POST", headers: { "content-type": "application/json", "x-mana-task-write-capability": await token },
   body: JSON.stringify({ tool, arguments: args, request_id: "Ev1", call_index: 1 }),
@@ -43,14 +53,20 @@ describe("runtime gateway proxy", () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       expect(url.pathname).toBe("/api/personal-knowledge/search");
-      expect(url.searchParams.get("query")).toBe("契約");
-      expect(url.searchParams.get("limit")).toBe("10");
-      expect(init?.method).toBe("GET");
+      expect(url.search).toBe("");
+      expect(init?.method).toBe("POST");
+      expect((init?.headers as Headers).get("content-type")).toBe("application/json");
       expect((init?.headers as Headers).get("authorization")).toBe("Bearer bb-token");
       expect((init?.headers as Headers).get("x-brainbase-proxy-person-id")).toBe("person-a");
       expect((init?.headers as Headers).get("x-brainbase-organization-id")).toBe("org-a");
       expect((init?.headers as Headers).get("x-brainbase-access-reason")).toBe("mana_personal_kg:Ev1");
-      expect(init?.body).toBeUndefined();
+      expect(JSON.parse(String(init?.body))).toEqual({
+        query: "契約", limit: 10,
+        company_authority_response: {
+          ...authority,
+          input: { capability: "personal_read", effect: "read", requestId: "Ev1" },
+        },
+      });
       return Response.json([{ event_id: "event-a", body: "本人メモ" }]);
     });
     const response = await createRuntimeGatewayProxyHandler(fetchImpl as typeof fetch, {
@@ -62,6 +78,55 @@ describe("runtime gateway proxy", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ untrusted_data: true, items: [{ event_id: "event-a", body: "本人メモ" }] });
     expect(resolveAuthority).toHaveBeenCalledWith({ capability: "personal_read", effect: "read", requestId: "Ev1" });
+  });
+
+  it("sends personal search through the trusted forwarder as an authority-bound POST", async () => {
+    const authorityResponse = { signed: "signed-read" };
+    const resolveAuthority = vi.fn(async () => ({
+      companyAuthorityResponse: authorityResponse, ownerPersonId: "person-a", organizationId: "org-a",
+    }));
+    const service = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const wire = JSON.parse(String(init?.body)) as {
+        provider_operation: string;
+        request: { query?: unknown; body?: unknown };
+      };
+      expect(wire.provider_operation).toBe("brainbase.personal_knowledge.search");
+      expect(wire.request).toEqual({
+        body: { query: "契約", limit: 10, company_authority_response: authorityResponse },
+      });
+      return Response.json({
+        provider: "brainbase",
+        operation_id: personalForwarderBinding.operation_id,
+        provider_operation: wire.provider_operation,
+        status: 200,
+        response_encoding: "utf8",
+        content_type: "application/json",
+        body: JSON.stringify([{ event_id: "event-a", body: "本人メモ" }]),
+      });
+    });
+    const forwarder = createBrainbaseTrustedProviderForwarderFromEnv({
+      env: {
+        BRAINBASE_PERSONAL_KNOWLEDGE_API_BASE_URL: "https://brainbase.example.com",
+        BRAINBASE_TENANT_RUNTIME_SERVICE: { fetch: service },
+      },
+      tenant_context: personalTenantContext,
+    });
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => forwarder.forward({
+      lease: personalForwarderLease,
+      expected_binding: personalForwarderBinding,
+      request: new Request(input, init),
+      now: personalForwarderLease.issued_at,
+    });
+
+    const response = await createRuntimeGatewayProxyHandler(fetchImpl as typeof fetch, {
+      personalKnowledge: { tenantContext: personalTenantContext, resolveAuthority },
+    })(await personalRequest("search_personal_kg", { query: " 契約 " }), {
+      ...env, RUNTIME_PLACEMENTS_JSON: personalPlacements, BRAINBASE_PERSONAL_KNOWLEDGE_API_BASE_URL: "https://brainbase.example.com",
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ untrusted_data: true, items: [{ event_id: "event-a", body: "本人メモ" }] });
+    expect(service).toHaveBeenCalledTimes(1);
   });
 
   it("registers only persisted personal event fields with write authority", async () => {
