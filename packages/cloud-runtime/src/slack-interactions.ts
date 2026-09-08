@@ -252,6 +252,7 @@ const TENANT_RESPONSE_URL_ELIGIBLE_CODES = new Set([
   "CREDENTIAL_LEASE_EXPIRED",
   "CREDENTIAL_LEASE_INVALID",
   // Known transient/quota failures may be safely surfaced without revealing a binding.
+  "COMPANY_IDENTITY_UNRESOLVED",
   "UPSTREAM_UNAVAILABLE",
   "WORKSPACE_CONNECTION_UNAVAILABLE",
   "QUOTA_EXCEEDED",
