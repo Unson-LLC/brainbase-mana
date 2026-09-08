@@ -88,9 +88,9 @@
   "deployment_authorization": {
     "reviewer_identity": "user:ksato",
     "reviewer_provenance": "codex:user-authorized-production-deploy",
-    "reviewed_commit_sha": "59e1813d29fff2bcb252be3a9b1a8930e9a8398b",
+    "reviewed_commit_sha": "ef050cb55cc791ba906605a63ad40130515bd3b6",
     "target": "unson-business-mana-runtime",
-    "authorized_at": "2026-09-08T00:04:56Z",
-    "expires_at": "2026-09-08T06:04:56Z"
+    "authorized_at": "2026-09-08T00:10:18.109Z",
+    "expires_at": "2026-09-08T06:10:18.109Z"
   }
 }
