@@ -608,6 +608,7 @@ describe("会社別Cloudflare deployment", () => {
       brainbase: "prj_01KGCS8CAJKKDWACPNK1E5WX8H",
       "back-office": "prj_01M04XZFSN3TWRE2K05MTD898P",
       mana: "prj_01KGHVCMA35JHSMXTSWQAS04PS",
+      baao: "prj_01KGCS8BC76XRHFCHRRQ8G25MY",
     });
     expect(unson.vars.MEETING_MINUTES_ROUTER_CHANNEL_ID).toBe("C0BKTFQ9V38");
     expect(unson.vars.MEETING_MINUTES_OPERATOR_USER_IDS).toBe("U088D1HBY6L,U0BKP8D3KPD,U07B19N048G");
@@ -619,6 +620,26 @@ describe("会社別Cloudflare deployment", () => {
       ...JSON.parse(unson.vars.MEETING_MINUTES_DESTINATIONS_JSON),
       ...JSON.parse(unson.vars.MEETING_MINUTES_ADDITIONAL_DESTINATIONS_JSON),
     ];
+    const baaoDestinations = destinations.filter((destination: { id: string }) =>
+      destination.id === "baao-growin" || destination.id === "baao");
+    expect(baaoDestinations.map((destination: { id: string; contextProjectCode: string }) => ({
+      id: destination.id,
+      contextProjectCode: destination.contextProjectCode,
+      authorityProjectId: (JSON.parse(unson.vars.MEETING_MINUTES_AUTHORITY_PROJECT_IDS_JSON) as Record<string, string>)[
+        destination.contextProjectCode
+      ],
+    }))).toEqual([
+      {
+        id: "baao-growin",
+        contextProjectCode: "baao",
+        authorityProjectId: "prj_01KGCS8BC76XRHFCHRRQ8G25MY",
+      },
+      {
+        id: "baao",
+        contextProjectCode: "baao",
+        authorityProjectId: "prj_01KGCS8BC76XRHFCHRRQ8G25MY",
+      },
+    ]);
     expect([...new Map(destinations.map((item: { organization: { id: string; name: string } }) =>
       [item.organization.id, item.organization.name])).entries()]).toEqual([
       ["unson-business", "雲孫 事業運営"], ["tech-knight", "Tech Knight"], ["unson", "雲孫"],
