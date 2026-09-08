@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { assessTenantRuntimeDeploymentConfig } from "../../scripts/tenant-runtime-deploy-readiness.mjs";
+import type { MeetingMinutesDestination } from "../meeting-minutes-contracts.js";
+import { resolveMeetingMinutesDestinationAuthorization } from "../meeting-minutes-selection-scope.js";
 import { parseTaskBoardTargets } from "../task-board-targets.js";
 
 interface DeploymentConfig {
@@ -609,6 +611,11 @@ describe("会社別Cloudflare deployment", () => {
       "back-office": "prj_01M04XZFSN3TWRE2K05MTD898P",
       mana: "prj_01KGHVCMA35JHSMXTSWQAS04PS",
       baao: "prj_01KGCS8BC76XRHFCHRRQ8G25MY",
+      zeims: "prj_01KGCS8CFEXJDVZ7DQB1GR7YJK",
+      aitle: "prj_01KGHVCM9PZ05R5VH1QMYEPEQ5",
+      senpainurse: "prj_01KQA2C88KRCGHFBGY36XKDYP2",
+      salestailor: "prj_01KGCS8BHT2ER86AWAMJ81D96C",
+      kartz: "prj_01M04XZFT3D6ZFZ4RMBZAVGV9Y",
     });
     expect(unson.vars.MEETING_MINUTES_ROUTER_CHANNEL_ID).toBe("C0BKTFQ9V38");
     expect(unson.vars.MEETING_MINUTES_OPERATOR_USER_IDS).toBe("U088D1HBY6L,U0BKP8D3KPD,U07B19N048G");
@@ -619,27 +626,27 @@ describe("会社別Cloudflare deployment", () => {
     const destinations = [
       ...JSON.parse(unson.vars.MEETING_MINUTES_DESTINATIONS_JSON),
       ...JSON.parse(unson.vars.MEETING_MINUTES_ADDITIONAL_DESTINATIONS_JSON),
-    ];
-    const baaoDestinations = destinations.filter((destination: { id: string }) =>
-      destination.id === "baao-growin" || destination.id === "baao");
-    expect(baaoDestinations.map((destination: { id: string; contextProjectCode: string }) => ({
-      id: destination.id,
-      contextProjectCode: destination.contextProjectCode,
-      authorityProjectId: (JSON.parse(unson.vars.MEETING_MINUTES_AUTHORITY_PROJECT_IDS_JSON) as Record<string, string>)[
-        destination.contextProjectCode
-      ],
-    }))).toEqual([
-      {
-        id: "baao-growin",
-        contextProjectCode: "baao",
-        authorityProjectId: "prj_01KGCS8BC76XRHFCHRRQ8G25MY",
-      },
-      {
-        id: "baao",
-        contextProjectCode: "baao",
-        authorityProjectId: "prj_01KGCS8BC76XRHFCHRRQ8G25MY",
-      },
-    ]);
+    ] as MeetingMinutesDestination[];
+    const authorityProjectIds = JSON.parse(unson.vars.MEETING_MINUTES_AUTHORITY_PROJECT_IDS_JSON) as Record<string, string>;
+    for (const destination of destinations) {
+      const authorityProjectId = authorityProjectIds[destination.contextProjectCode];
+      expect(authorityProjectId, `missing authority mapping for ${destination.id}`)
+        .toMatch(/^prj_[A-Za-z0-9]+$/);
+      expect(resolveMeetingMinutesDestinationAuthorization(
+        destination,
+        unson.vars.MEETING_MINUTES_AUTHORITY_PROJECT_IDS_JSON,
+        unson.vars.MANA_REQUIRED_AUDIENCE,
+        unson.vars.MANA_REQUIRED_CAPABILITY_ID,
+        "worker_ingress",
+      )).toEqual({
+        required_authorization: {
+          audience: "mana-runtime",
+          project_id: authorityProjectId,
+          capability_id: "runtime.execute",
+        },
+        trusted_project_ids: [authorityProjectId],
+      });
+    }
     expect([...new Map(destinations.map((item: { organization: { id: string; name: string } }) =>
       [item.organization.id, item.organization.name])).entries()]).toEqual([
       ["unson-business", "雲孫 事業運営"], ["tech-knight", "Tech Knight"], ["unson", "雲孫"],
@@ -746,6 +753,27 @@ describe("会社別Cloudflare deployment", () => {
     const raw = readFileSync(fileURLToPath(new URL("../../wrangler.unson-business.jsonc", import.meta.url)), "utf8");
     expect(raw.match(/"BRAINBASE_WORKSPACE_CONNECTIONS_JSON"/g) ?? []).toHaveLength(1);
     expect(raw).not.toContain('"GITHUB_TOKEN":');
+  });
+
+  it("fails closed when a configured destination authority mapping is removed", () => {
+    const destinations = [
+      ...JSON.parse(unson.vars.MEETING_MINUTES_DESTINATIONS_JSON),
+      ...JSON.parse(unson.vars.MEETING_MINUTES_ADDITIONAL_DESTINATIONS_JSON),
+    ] as MeetingMinutesDestination[];
+    const authorityProjectIds = JSON.parse(unson.vars.MEETING_MINUTES_AUTHORITY_PROJECT_IDS_JSON) as Record<string, string>;
+    const destination = destinations.find((candidate) => candidate.id === "zeims");
+    expect(destination).toBeDefined();
+    delete authorityProjectIds[destination?.contextProjectCode ?? "zeims"];
+    expect(() => resolveMeetingMinutesDestinationAuthorization(
+      destination as MeetingMinutesDestination,
+      JSON.stringify(authorityProjectIds),
+      unson.vars.MANA_REQUIRED_AUDIENCE,
+      unson.vars.MANA_REQUIRED_CAPABILITY_ID,
+      "worker_ingress",
+    )).toThrowError(expect.objectContaining({
+      code: "PROJECT_SCOPE_MISMATCH",
+      details: { scope_reason: "destination_authority_project_id_missing" },
+    }));
   });
 
   it("wires signed interactions and meeting-minutes Queue handling without removing task entrypoints", () => {
