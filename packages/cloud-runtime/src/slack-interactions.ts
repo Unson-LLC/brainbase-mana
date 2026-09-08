@@ -831,8 +831,8 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     let message: SlackInteractionMessage;
     try {
       message = organizationAction
-        ? projectSelectionMessage(runId, fileName, organizationId ?? "", destinations)
-        : organizationSelectionMessage(runId, fileName, destinations);
+        ? projectSelectionMessage(runId, fileName, organizationId ?? "", destinations, sourceThreadTs)
+        : organizationSelectionMessage(runId, fileName, destinations, sourceThreadTs);
     } catch { return response("slack_interaction_invalid", 400); }
     options.defer((async () => {
       try {
@@ -975,15 +975,18 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     const pending: Promise<void>[] = [];
     // Keep nested projections and queue work in the same waitUntil lifetime.
     options = { ...options, defer: (work) => { pending.push(work); } };
-    // This is only a receipt to the person who clicked a signed, locally
-    // validated button. It carries no tenant/catalog/run data and never changes
-    // the shared message. Detailed projections and all work still require the
-    // tenant boundary below. Keep this independent of authority and queue waits.
+    // A signed, locally validated action may receive a generic source-thread
+    // receipt before tenant/queue work. response_url thread replies require
+    // in_channel; include no tenant/catalog/run/user data and never replace the
+    // shared message. Without a source thread, omit this optional receipt.
+    // Detailed projections and all work still require the tenant boundary.
     const receiptUrl = slackResponseUrl(payload?.response_url);
     const projectReceipt = options.updateBeforeTenant;
-    if (receiptUrl && projectReceipt && !redoAction && !confirmRedoAction && (!destinationAction || selectedDestination)) {
+    if (receiptUrl && projectReceipt && threadTsCandidates[0] && !redoAction && !confirmRedoAction &&
+      (!destinationAction || selectedDestination)) {
       const text = "操作を受け付けました。確認しています。";
-      const receipt: SlackInteractionMessage = { replace_original: false, response_type: "ephemeral", text,
+      const receipt: SlackInteractionMessage = { replace_original: false, response_type: "in_channel",
+        thread_ts: threadTsCandidates[0], text,
         blocks: [{ type: "section", text: { type: "plain_text", text } }] };
       pending.push(Promise.resolve().then(() => projectReceipt(receiptUrl, receipt)).then(() => {
         console.info(JSON.stringify({ event: "meeting_minutes_interaction_receipt_delivered", interactionId,

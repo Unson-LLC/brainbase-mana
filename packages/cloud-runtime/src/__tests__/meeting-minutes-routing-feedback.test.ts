@@ -105,7 +105,8 @@ const receiptText = "操作を受け付けました。確認しています。";
 function expectGenericReceipt(message: unknown) {
   expect(message).toEqual({
     replace_original: false,
-    response_type: "ephemeral",
+    response_type: "in_channel",
+    thread_ts: "1.0",
     text: receiptText,
     blocks: [{ type: "section", text: { type: "plain_text", text: receiptText } }],
   });
@@ -362,6 +363,104 @@ describe("meeting minutes routing feedback", () => {
 
     expect(response.status).toBe(200);
     await Promise.all(background.work);
+    expect(updateBeforeTenant).not.toHaveBeenCalled();
+  });
+
+  it("uses sourceThreadTs from the signed action value when Slack omits the message thread", async () => {
+    const payload = basePayload("mana_meeting_minutes_choose_destination", {
+      runId: "Ev1_F1", destinationId: "mana", fileName: "定例.txt", sourceThreadTs: "1.0",
+    });
+    delete (payload as { message?: unknown }).message;
+    const updateBeforeTenant = vi.fn().mockResolvedValue(undefined);
+    const updateOriginal = vi.fn().mockResolvedValue(undefined);
+    const send = vi.fn().mockResolvedValue(undefined);
+    const background = deferred();
+    const response = await handleMeetingMinutesInteraction(request(payload), {
+      signingSecret: secret,
+      expectedAppId: "A1",
+      operatorUserIds: new Set(["U1"]),
+      nowMs: now * 1000,
+      ...tenantBoundary,
+      destinations,
+      send,
+      updateBeforeTenant,
+      updateOriginal,
+      isIntakePaused: vi.fn().mockResolvedValue(false),
+      defer: background.defer,
+      acknowledgeBeforeTenant: true,
+    });
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(updateBeforeTenant).toHaveBeenCalledOnce());
+    expectGenericReceipt(updateBeforeTenant.mock.calls[0]?.[1]);
+    await Promise.all(background.work);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ threadTs: "1.0" }), expect.objectContaining({ id: "mana" }));
+  });
+
+  it("acks quickly and skips the generic receipt when no source thread is available", async () => {
+    let releaseTenant!: (effects: TenantInteractionEffects) => void;
+    const tenantGate = new Promise<TenantInteractionEffects>((resolve) => { releaseTenant = resolve; });
+    const payload = basePayload("mana_meeting_minutes_choose_destination", {
+      runId: "Ev1_F1", destinationId: "mana", fileName: "定例.txt",
+    });
+    delete (payload as { message?: unknown }).message;
+    const updateBeforeTenant = vi.fn().mockResolvedValue(undefined);
+    const updateOriginal = vi.fn().mockResolvedValue(undefined);
+    const send = vi.fn().mockResolvedValue(undefined);
+    const resolveThreadTs = vi.fn().mockResolvedValue("1.0");
+    const background = deferred();
+    const response = await handleMeetingMinutesInteraction(request(payload), {
+      signingSecret: secret,
+      expectedAppId: "A1",
+      operatorUserIds: new Set(["U1"]),
+      nowMs: now * 1000,
+      ...tenantBoundary,
+      resolveTenantEffects: vi.fn(() => tenantGate),
+      destinations,
+      send,
+      updateBeforeTenant,
+      updateOriginal,
+      resolveThreadTs,
+      isIntakePaused: vi.fn().mockResolvedValue(false),
+      defer: background.defer,
+      acknowledgeBeforeTenant: true,
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateBeforeTenant).not.toHaveBeenCalled();
+    expect(background.work).toHaveLength(1);
+    releaseTenant(await tenantBoundary.resolveTenantEffects({
+      app_id: "A1", workspace_id: "T1", event_id: "slack-interaction-feedback",
+      channel_id: "C1", thread_ts: "interaction:fallback", requester_id: "U1",
+    }));
+    await Promise.all(background.work);
+    expect(resolveThreadTs).toHaveBeenCalledWith("Ev1_F1");
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ threadTs: "1.0" }),
+      expect.objectContaining({ id: "mana" }));
+  });
+
+  it("rejects conflicting source thread coordinates before tenant resolution", async () => {
+    const payload = basePayload("mana_meeting_minutes_choose_destination", {
+      runId: "Ev1_F1", destinationId: "mana", fileName: "定例.txt", sourceThreadTs: "2.0",
+    });
+    const resolveTenantEffects = vi.fn(tenantBoundary.resolveTenantEffects);
+    const updateBeforeTenant = vi.fn();
+    const response = await handleMeetingMinutesInteraction(request(payload), {
+      signingSecret: secret,
+      expectedAppId: "A1",
+      operatorUserIds: new Set(["U1"]),
+      nowMs: now * 1000,
+      ...tenantBoundary,
+      resolveTenantEffects,
+      destinations,
+      send: vi.fn(),
+      updateBeforeTenant,
+      acknowledgeBeforeTenant: true,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "slack_interaction_invalid" });
+    expect(resolveTenantEffects).not.toHaveBeenCalled();
     expect(updateBeforeTenant).not.toHaveBeenCalled();
   });
 
