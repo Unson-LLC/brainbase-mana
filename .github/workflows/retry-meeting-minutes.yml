@@ -207,7 +207,6 @@ jobs:
           if [[ -z "$expected_outcome_case_id" ]]; then
             expected_outcome_case_id="$baseline_outcome_case_id"
           fi
-          test -n "$expected_outcome_case_id"
           if jq -e '.runReceipt.failure.stage == "run_receipt" and .runReceipt.failure.retryable == false' \
             "$response_file" >/dev/null; then
             echo "Run receipt has a non-retryable contract failure; retry was not enqueued" >&2
@@ -223,7 +222,8 @@ jobs:
               --arg workspaceId "$WORKSPACE_ID" \
               --arg actionTs "$action_ts" \
               --arg outcomeCaseId "$expected_outcome_case_id" \
-              '{tenantId:$tenantId,workspaceId:$workspaceId,actionTs:$actionTs,outcomeCaseId:$outcomeCaseId}')" \
+              '{tenantId:$tenantId,workspaceId:$workspaceId,actionTs:$actionTs}
+              + (if $outcomeCaseId == "" then {} else {outcomeCaseId:$outcomeCaseId} end)')" \
             "https://unson-business-mana-runtime.unson.workers.dev/admin/meeting-minutes/runs/${RUN_ID}/authorized-retry")"
           jq -e --arg runId "$RUN_ID" --arg status "$status" \
             '$status == "200" and .runId == $runId and .enqueued == true' \
@@ -254,11 +254,13 @@ jobs:
                 and (.sourceStatus.projectedAt // "") != ""
                 and .sourceStatus.projectedAt != $baselineSourceProjectedAt
                 and (.sourceStatus.projectionFailure == null)
-                and .outcomeCaseId == $expectedOutcomeCaseId
-                and .runReceipt.status == "delivered"
-                and .runReceipt.caseId == $expectedOutcomeCaseId
-                and (.runReceipt.receiptId // "") != ""
-                and (.runReceipt.deliveredAt // "") != ""' "$response_file" >/dev/null; then
+                and (($expectedOutcomeCaseId == "" and (.outcomeCaseId // "") == "")
+                  or ($expectedOutcomeCaseId != ""
+                    and .outcomeCaseId == $expectedOutcomeCaseId
+                    and .runReceipt.status == "delivered"
+                    and .runReceipt.caseId == $expectedOutcomeCaseId
+                    and (.runReceipt.receiptId // "") != ""
+                    and (.runReceipt.deliveredAt // "") != ""))' "$response_file" >/dev/null; then
                 retry_confirmed=true
                 break
               fi
@@ -300,7 +302,7 @@ jobs:
                 print_safe_run_receipt_failure
                 exit 1
               fi
-              if jq -e --arg expectedOutcomeCaseId "$expected_outcome_case_id" \
+              if [[ -n "$expected_outcome_case_id" ]] && jq -e --arg expectedOutcomeCaseId "$expected_outcome_case_id" \
                 '.outcomeCaseId != $expectedOutcomeCaseId
                 or .runReceipt.status != "delivered"
                 or .runReceipt.caseId != $expectedOutcomeCaseId
