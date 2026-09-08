@@ -994,9 +994,9 @@ describe("TechKnight Slack reply pipeline", () => {
     expect(mcpConfig).toBe(JSON.stringify({
       mcpServers: {
         brainbase: {
-          type: "http",
-          url: "https://brainbase-mcp.internal/mcp",
-          headers: { "x-mana-tenant-boundary-handle": TENANT_BOUNDARY_A },
+          command: "node",
+          args: ["/opt/mana/brainbase-mcp-server.mjs"],
+          env: { MANA_TENANT_BOUNDARY_HANDLE: TENANT_BOUNDARY_A },
         },
         "task-search": {
           command: "node",
@@ -1027,8 +1027,8 @@ describe("TechKnight Slack reply pipeline", () => {
     expect(String(writes["/tmp/mana-slack-prompt.txt"])).toContain("transition_task");
     expect(JSON.parse(String(writes["/tmp/mana-task-search-mcp.json"]))).toEqual({
       mcpServers: {
-        brainbase: { type: "http", url: "https://brainbase-mcp.internal/mcp",
-          headers: { "x-mana-tenant-boundary-handle": TENANT_BOUNDARY_A } },
+        brainbase: { command: "node", args: ["/opt/mana/brainbase-mcp-server.mjs"],
+          env: { MANA_TENANT_BOUNDARY_HANDLE: TENANT_BOUNDARY_A } },
         "task-search": { command: "node", args: ["/opt/mana/task-search-mcp-server.mjs"],
           env: { MANA_TENANT_BOUNDARY_HANDLE: TENANT_BOUNDARY_A } },
         "task-write": { command: "node", args: ["/opt/mana/task-write-mcp-server.mjs"],
