@@ -2,6 +2,10 @@ const TOOLS = new Set([
   "mcp__brainbase__brainbase_resolve_turn",
   "mcp__brainbase__brainbase_judgment_state_record",
 ]);
+const STATE_RECORD_TOOL_NAMES = new Set([
+  "mcp__brainbase__brainbase_judgment_state_record",
+  "brainbase_judgment_state_record",
+]);
 
 // Keep this list in sync with the errors that the interactive judgment Hook
 // can actually throw. A stream may contain arbitrary tool output, so a
@@ -61,6 +65,16 @@ type RecordValue = Record<string, unknown>;
 type BrainbaseConnectionStatus = "connected" | "failed" | "pending" | "needs-auth" | "disabled" | "unknown";
 type FailureCategory = "pretool_denied" | "hook_failure" | "tool_unavailable" | "input_validation" | "transport_timeout" | "transport_http_error" | "connection_error" | "unknown";
 
+export interface ReplyClaudeTimeoutDiagnostics {
+  streamStatus: "empty" | "partial" | "result_observed";
+  stopHookResponseCount: number;
+  decisionBlockCount: number;
+  exitErrorCount: number;
+  hookCodes: string[];
+  stateRecordToolUseCount: number;
+  resultEventPresent: boolean;
+}
+
 const record = (v: unknown): RecordValue | undefined =>
   v !== null && typeof v === "object" && !Array.isArray(v) ? v as RecordValue : undefined;
 
@@ -70,6 +84,49 @@ function hasFixedCode(text: string, code: string): boolean {
 
 function fixedCodes(text: string): string[] {
   return CODES.filter((code) => hasFixedCode(text, code));
+}
+
+function fixedHookCodes(text: string): string[] {
+  return HOOK_CODES.filter((code) => hasFixedCode(text, code));
+}
+
+function parsedRecord(value: unknown): RecordValue | undefined {
+  if (typeof value !== "string") return record(value);
+  try {
+    return record(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+}
+
+function stopHookResponse(event: RecordValue): boolean {
+  return event.type === "system" && event.subtype === "hook_response"
+    && (event.hook_event === "Stop" || event.hook_event_name === "Stop");
+}
+
+function hasBlockDecision(event: RecordValue): boolean {
+  if (event.decision === "block") return true;
+  for (const value of [event.output, event.stdout]) {
+    if (parsedRecord(value)?.decision === "block") return true;
+  }
+  return false;
+}
+
+function hasNonZeroExitCode(value: unknown): boolean {
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+  return typeof value === "string" && /^-?[1-9][0-9]*$/.test(value);
+}
+
+function hookCodeText(event: RecordValue): string[] {
+  const values: string[] = [];
+  for (const value of [event.stderr, event.stdout, event.output, event.reason]) {
+    if (typeof value === "string") values.push(value);
+    const parsed = parsedRecord(value);
+    for (const nested of [parsed?.reason, parsed?.stderr, parsed?.stdout, parsed?.systemMessage]) {
+      if (typeof nested === "string") values.push(nested);
+    }
+  }
+  return values;
 }
 
 function connectionStatus(value: unknown): BrainbaseConnectionStatus {
@@ -211,4 +268,73 @@ export function replyToolFailureDiagnostics(stdout: string) {
     if (failures.length === 8) break;
   }
   return failures;
+}
+
+/**
+ * Extract only fixed, non-content metadata from a timed-out Claude stream.
+ * Every count is limited to observed structured events; a partial stream is
+ * explicitly marked so zero values are never mistaken for a complete audit.
+ */
+export function replyClaudeTimeoutDiagnostics(stdout: string): ReplyClaudeTimeoutDiagnostics {
+  let nonEmptyLineCount = 0;
+  let malformedLineCount = 0;
+  let stopHookResponseCount = 0;
+  let decisionBlockCount = 0;
+  let exitErrorCount = 0;
+  let stateRecordToolUseCount = 0;
+  let resultEventPresent = false;
+  const hookCodes = new Set<string>();
+
+  for (const line of stdout.split("\n")) {
+    if (line.trim().length === 0) continue;
+    nonEmptyLineCount += 1;
+    let event: RecordValue | undefined;
+    try {
+      event = record(JSON.parse(line));
+    } catch {
+      malformedLineCount += 1;
+      continue;
+    }
+    if (!event) {
+      malformedLineCount += 1;
+      continue;
+    }
+    if (event.type === "result") resultEventPresent = true;
+
+    if (event.type === "system" && event.subtype === "hook_response") {
+      if (stopHookResponse(event)) {
+        stopHookResponseCount += 1;
+        if (hasBlockDecision(event)) decisionBlockCount += 1;
+        if (hasNonZeroExitCode(event.exit_code) || event.outcome === "error") exitErrorCount += 1;
+      }
+      for (const value of hookCodeText(event)) {
+        for (const code of fixedHookCodes(value)) hookCodes.add(code);
+      }
+    }
+
+    const content = record(event.message)?.content;
+    if (!Array.isArray(content)) continue;
+    for (const value of content) {
+      const block = record(value);
+      if (block?.type === "tool_use" && typeof block.name === "string"
+        && STATE_RECORD_TOOL_NAMES.has(block.name)) {
+        stateRecordToolUseCount += 1;
+      }
+    }
+  }
+
+  const streamStatus = nonEmptyLineCount === 0
+    ? "empty"
+    : malformedLineCount > 0 || !resultEventPresent
+      ? "partial"
+      : "result_observed";
+  return {
+    streamStatus,
+    stopHookResponseCount,
+    decisionBlockCount,
+    exitErrorCount,
+    hookCodes: [...hookCodes],
+    stateRecordToolUseCount,
+    resultEventPresent,
+  };
 }

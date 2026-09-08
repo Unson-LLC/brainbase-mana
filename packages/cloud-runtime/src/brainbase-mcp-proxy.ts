@@ -56,6 +56,173 @@ type McpLifecycleCategory =
   | "transport_error"
   | "catalog_error";
 
+const SAFE_JUDGMENT_HOOK_ERROR_CODES = new Set(["judgment_episode_not_found"]);
+const JUDGMENT_AUDIT_PREFIXES = ["🧠 判断参照:", "⚠️ 判断参照:"] as const;
+const BRAINBASE_AUDIT_PREFIXES = ["📚 Brainbase", "⚠️ Brainbase"] as const;
+const MODEL_ACTION_REQUEST_PATTERN = /(?:mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+|brainbase_[a-z0-9_]+).{0,120}(?:実行|呼び出|tool call|call)/isu;
+const MODEL_ACTION_REQUEST_REVERSE_PATTERN = /(?:実行|呼び出|tool call|call).{0,120}(?:mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+|brainbase_[a-z0-9_]+)/isu;
+
+type JudgmentHookResponseKind = "empty" | "system_message" | "block" | "invalid";
+type JudgmentHookDecision = "block" | "absent" | "invalid";
+
+interface JudgmentHookDiagnosticRequest {
+  isStop: boolean;
+  stopHookActive: boolean;
+}
+
+interface JsonRecord {
+  [key: string]: unknown;
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+async function judgmentHookDiagnosticRequest(request: Request): Promise<JudgmentHookDiagnosticRequest> {
+  if (new URL(request.url).pathname !== BRAINBASE_JUDGMENT_HOOK_PROXY_PATH || request.method !== "POST") {
+    return { isStop: false, stopHookActive: false };
+  }
+  try {
+    const body = await request.clone().json();
+    if (!isJsonRecord(body)) return { isStop: false, stopHookActive: false };
+    const eventName = body.hook_event_name ?? body.hookEventName;
+    return {
+      isStop: eventName === "Stop",
+      stopHookActive: body.stop_hook_active === true,
+    };
+  } catch {
+    return { isStop: false, stopHookActive: false };
+  }
+}
+
+function safeHttpStatus(status: number): number | null {
+  return Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasAuditPrefix(value: unknown, prefixes: readonly string[]): boolean {
+  return typeof value === "string"
+    && value.split(/\r?\n/u).some((line) => prefixes.some((prefix) => line.startsWith(prefix)));
+}
+
+function modelActionRequested(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return MODEL_ACTION_REQUEST_PATTERN.test(value) || MODEL_ACTION_REQUEST_REVERSE_PATTERN.test(value);
+}
+
+function safeJudgmentHookErrorCode(value: unknown): string | null {
+  const candidates: unknown[] = [];
+  if (isJsonRecord(value)) {
+    candidates.push(value.error);
+    if (isJsonRecord(value.error)) candidates.push(value.error.code);
+    if (isJsonRecord(value.output)) {
+      candidates.push(value.output.error);
+      if (isJsonRecord(value.output.error)) candidates.push(value.output.error.code);
+    }
+  }
+  return candidates.find((candidate): candidate is string =>
+    typeof candidate === "string" && SAFE_JUDGMENT_HOOK_ERROR_CODES.has(candidate)) ?? null;
+}
+
+function judgmentHookOutput(body: unknown): { output?: JsonRecord; invalid: boolean } {
+  if (!isJsonRecord(body)) return { invalid: true };
+  if (body.schema_version !== "1" || body.accepted !== true || body.hook_event_name !== "Stop"
+      || !isJsonRecord(body.output)) return { invalid: true };
+  return { output: body.output, invalid: false };
+}
+
+function judgmentHookResponseSummary(body: unknown): {
+  responseKind: JudgmentHookResponseKind;
+  decision: JudgmentHookDecision;
+  hasReason: boolean;
+  hasSystemMessage: boolean;
+  hasJudgmentAudit: boolean;
+  hasBrainbaseAudit: boolean;
+  modelActionRequested: boolean;
+  errorCode: string | null;
+} {
+  const parsed = judgmentHookOutput(body);
+  const output = parsed.output;
+  const reason = output?.reason;
+  const systemMessage = output?.systemMessage;
+  const hasReason = nonEmptyString(reason);
+  const hasSystemMessage = nonEmptyString(systemMessage);
+  const decision: JudgmentHookDecision = !output || parsed.invalid
+    ? "invalid"
+    : Object.hasOwn(output, "decision")
+      ? output.decision === "block" ? "block" : "invalid"
+      : "absent";
+  let responseKind: JudgmentHookResponseKind = "invalid";
+  if (!parsed.invalid && output) {
+    if (decision === "block") {
+      responseKind = "block";
+    } else if (decision === "invalid" || Object.hasOwn(output, "reason")) {
+      responseKind = "invalid";
+    } else if (Object.hasOwn(output, "systemMessage")) {
+      responseKind = hasSystemMessage ? "system_message" : "invalid";
+    } else if (Object.keys(output).length === 0) {
+      responseKind = "empty";
+    } else {
+      responseKind = "invalid";
+    }
+  }
+  return {
+    responseKind,
+    decision,
+    hasReason,
+    hasSystemMessage,
+    hasJudgmentAudit: hasAuditPrefix(reason, JUDGMENT_AUDIT_PREFIXES),
+    hasBrainbaseAudit: hasAuditPrefix(reason, BRAINBASE_AUDIT_PREFIXES),
+    modelActionRequested: modelActionRequested(reason),
+    errorCode: safeJudgmentHookErrorCode(body),
+  };
+}
+
+function logJudgmentHookRequestDiagnostic(diagnosticRequest: JudgmentHookDiagnosticRequest): void {
+  if (!diagnosticRequest.isStop) return;
+  try {
+    console.log(JSON.stringify({
+      event: "brainbase_judgment_hook_diagnostic",
+      phase: "request_received",
+      hook_event_name: "Stop",
+      stop_hook_active: diagnosticRequest.stopHookActive,
+    }));
+  } catch { /* Diagnostics are best effort and must not alter Hook semantics. */ }
+}
+
+async function logJudgmentHookResponseDiagnostic(
+  response: Response,
+  diagnosticRequest: JudgmentHookDiagnosticRequest,
+): Promise<void> {
+  if (!diagnosticRequest.isStop) return;
+  try {
+    let body: unknown;
+    try {
+      body = JSON.parse(await response.clone().text());
+    } catch {
+      body = undefined;
+    }
+    const summary = judgmentHookResponseSummary(body);
+    console.log(JSON.stringify({
+      event: "brainbase_judgment_hook_diagnostic",
+      phase: "response",
+      status: safeHttpStatus(response.status),
+      response_kind: summary.responseKind,
+      decision: summary.decision,
+      stop_hook_active: diagnosticRequest.stopHookActive,
+      has_reason: summary.hasReason,
+      has_system_message: summary.hasSystemMessage,
+      has_judgment_audit: summary.hasJudgmentAudit,
+      has_brainbase_audit: summary.hasBrainbaseAudit,
+      model_action_requested: summary.modelActionRequested,
+      error_code: summary.errorCode,
+    }));
+  } catch { /* Diagnostics are best effort and must not alter Hook semantics. */ }
+}
+
 function mcpLifecycleMethod(method: string | undefined): McpLifecycleMethod | undefined {
   return method && MCP_LIFECYCLE_METHODS.has(method as McpLifecycleMethod)
     ? method as McpLifecycleMethod
@@ -168,6 +335,8 @@ export async function handleBrainbaseMcpProxyRequest(
   policy?: BrainbaseMcpProxyPolicy,
 ): Promise<Response> {
   const url = new URL(request.url);
+  const judgmentHookDiagnostic = await judgmentHookDiagnosticRequest(request);
+  logJudgmentHookRequestDiagnostic(judgmentHookDiagnostic);
   const method = await mcpMethod(request);
   const lifecycleMethod = mcpLifecycleMethod(method);
   logMcpLifecycle(lifecycleMethod, { category: "request_received" });
@@ -193,7 +362,9 @@ export async function handleBrainbaseMcpProxyRequest(
     ? ["POST", "DELETE"].includes(request.method)
     : request.method === "POST";
   if (url.hostname !== BRAINBASE_MCP_PROXY_HOST || !isAllowedPath || !allowedMethod) {
-    return Response.json({ error: { code: "BRAINBASE_OPERATION_FORBIDDEN", retryable: false } }, { status: 403 });
+    const response = Response.json({ error: { code: "BRAINBASE_OPERATION_FORBIDDEN", retryable: false } }, { status: 403 });
+    await logJudgmentHookResponseDiagnostic(response, judgmentHookDiagnostic);
+    return response;
   }
   // This policy is supplied by the verified durable boundary, never by model
   // request headers. Tool discovery/annotations do not authorize tool calls.
@@ -210,9 +381,11 @@ export async function handleBrainbaseMcpProxyRequest(
     } catch { /* Malformed/batch requests cannot bypass the operation gate. */ }
     if (!allowed) {
       logPhase("policy", 403);
-      return Response.json({
+      const response = Response.json({
         error: { code: "COMPANY_AUTHORITY_OPERATION_FORBIDDEN", retryable: false },
       }, { status: 403 });
+      await logJudgmentHookResponseDiagnostic(response, judgmentHookDiagnostic);
+      return response;
     }
   }
   if (!env.BRAINBASE_MCP_BASE_URL || (!env.BRAINBASE_MCP_TOKEN && !fetchImpl)) {
@@ -222,7 +395,9 @@ export async function handleBrainbaseMcpProxyRequest(
       safeError: "BRAINBASE_PROXY_NOT_CONFIGURED",
       category: "configuration_error",
     });
-    return Response.json({ error: { code: "BRAINBASE_PROXY_NOT_CONFIGURED", retryable: true } }, { status: 503 });
+    const response = Response.json({ error: { code: "BRAINBASE_PROXY_NOT_CONFIGURED", retryable: true } }, { status: 503 });
+    await logJudgmentHookResponseDiagnostic(response, judgmentHookDiagnostic);
+    return response;
   }
   const headers = new Headers();
   for (const name of [
@@ -235,16 +410,20 @@ export async function handleBrainbaseMcpProxyRequest(
   if (policy?.companyAuthorityResponse !== undefined) {
     const encodedAuthority = base64UrlEncodeUtf8(JSON.stringify(policy.companyAuthorityResponse));
     if (new TextEncoder().encode(encodedAuthority).byteLength > MAX_COMPANY_AUTHORITY_HEADER_BYTES) {
-      return Response.json({
+      const response = Response.json({
         error: { code: "COMPANY_AUTHORITY_RESPONSE_TOO_LARGE", retryable: false },
       }, { status: 403 });
+      await logJudgmentHookResponseDiagnostic(response, judgmentHookDiagnostic);
+      return response;
     }
     headers.set(COMPANY_AUTHORITY_HEADER, encodedAuthority);
   }
   if (url.pathname === BRAINBASE_JUDGMENT_HOOK_PROXY_PATH) {
     const projectCode = env.BRAINBASE_JUDGMENT_PROJECT_CODE?.trim();
     if (!projectCode) {
-      return Response.json({ error: { code: "BRAINBASE_PROXY_NOT_CONFIGURED", retryable: true } }, { status: 503 });
+      const response = Response.json({ error: { code: "BRAINBASE_PROXY_NOT_CONFIGURED", retryable: true } }, { status: 503 });
+      await logJudgmentHookResponseDiagnostic(response, judgmentHookDiagnostic);
+      return response;
     }
     headers.set("x-brainbase-project-code", projectCode);
   }
@@ -262,7 +441,9 @@ export async function handleBrainbaseMcpProxyRequest(
         safeError: "BRAINBASE_UPSTREAM_REDIRECT_REJECTED",
         category: "transport_error",
       });
-      return Response.json({ error: { code: "BRAINBASE_UPSTREAM_REDIRECT_REJECTED", retryable: false } }, { status: 502 });
+      const redirectResponse = Response.json({ error: { code: "BRAINBASE_UPSTREAM_REDIRECT_REJECTED", retryable: false } }, { status: 502 });
+      await logJudgmentHookResponseDiagnostic(redirectResponse, judgmentHookDiagnostic);
+      return redirectResponse;
     }
     if (policy && method === "tools/list" && response.ok) {
       const filtered = await filterToolCatalogResponse(response, policy.allowedTools);
@@ -274,6 +455,7 @@ export async function handleBrainbaseMcpProxyRequest(
     logMcpLifecycle(lifecycleMethod, response.status >= 400
       ? { status: response.status, safeError: safeUpstreamError(response.status), category: lifecycleCategory(response.status) }
       : { status: response.status, category: lifecycleCategory(response.status) });
+    await logJudgmentHookResponseDiagnostic(response, judgmentHookDiagnostic);
     if (toolName) {
       const diagnostic = await response.clone().text();
       console.log(JSON.stringify({
@@ -292,6 +474,8 @@ export async function handleBrainbaseMcpProxyRequest(
       ...safeTransportFailure(error),
       category: "transport_error",
     });
-    return Response.json({ error: { code: "BRAINBASE_UPSTREAM_UNAVAILABLE", retryable: true } }, { status: 502 });
+    const response = Response.json({ error: { code: "BRAINBASE_UPSTREAM_UNAVAILABLE", retryable: true } }, { status: 502 });
+    await logJudgmentHookResponseDiagnostic(response, judgmentHookDiagnostic);
+    return response;
   }
 }
