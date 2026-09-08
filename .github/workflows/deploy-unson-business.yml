@@ -66,6 +66,26 @@ jobs:
           test -n "$BRAINBASE_RUN_RECEIPT_SERVICE_TOKEN"
           test -n "$SANDBOX_PROBE_TOKEN"
 
+      - name: Brainbaseプロジェクト参照を事前確認
+        shell: bash
+        env:
+          BRAINBASE_TASK_API_BASE_URL: https://bb.unson.jp
+          BRAINBASE_GRAPH_API_BASE_URL: https://bb.unson.jp
+          BRAINBASE_TASK_API_TOKEN: ${{ secrets.BRAINBASE_TASK_API_TOKEN }}
+          BRAINBASE_GRAPH_API_TOKEN: ${{ secrets.BRAINBASE_GRAPH_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { assertBrainbaseMeetingMinutesRuntimeProjects } from "./packages/cloud-runtime/scripts/brainbase-project-binding-check.mjs";
+
+          await assertBrainbaseMeetingMinutesRuntimeProjects({
+            taskBaseUrl: process.env.BRAINBASE_TASK_API_BASE_URL,
+            graphBaseUrl: process.env.BRAINBASE_GRAPH_API_BASE_URL,
+            taskToken: process.env.BRAINBASE_TASK_API_TOKEN,
+            graphToken: process.env.BRAINBASE_GRAPH_API_TOKEN,
+          });
+          NODE
+
       - name: BrainbaseトークンをWorkerへ設定
         shell: bash
         env:

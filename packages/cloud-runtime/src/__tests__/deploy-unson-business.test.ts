@@ -34,7 +34,30 @@ describe("unson business deploy wrapper", () => {
     );
 
     expect(workflow).toContain('test -n "$BRAINBASE_TASK_API_TOKEN"');
-    expect(workflow.match(/BRAINBASE_TASK_API_TOKEN: \$\{\{ secrets\.BRAINBASE_TASK_API_TOKEN \}\}/g)).toHaveLength(2);
+    expect(workflow.match(/BRAINBASE_TASK_API_TOKEN: \$\{\{ secrets\.BRAINBASE_TASK_API_TOKEN \}\}/g)).toHaveLength(3);
+  });
+
+  it("runs the Brainbase project preflight before mutating Worker secrets", async () => {
+    const workflow = await readFile(
+      fileURLToPath(new URL("../../../../.github/workflows/deploy-unson-business.yml", import.meta.url)),
+      "utf8",
+    );
+    const preflightStep = "      - name: Brainbaseプロジェクト参照を事前確認";
+    const secretStep = "      - name: BrainbaseトークンをWorkerへ設定";
+    const preflightIndex = workflow.indexOf(preflightStep);
+    const secretIndex = workflow.indexOf(secretStep);
+
+    expect(preflightIndex).toBeGreaterThan(-1);
+    expect(secretIndex).toBeGreaterThan(-1);
+    expect(preflightIndex).toBeLessThan(secretIndex);
+
+    const preflight = workflow.slice(preflightIndex, secretIndex);
+    expect(preflight).toContain("BRAINBASE_TASK_API_BASE_URL: https://bb.unson.jp");
+    expect(preflight).toContain("BRAINBASE_GRAPH_API_BASE_URL: https://bb.unson.jp");
+    expect(preflight).toContain("BRAINBASE_TASK_API_TOKEN: ${{ secrets.BRAINBASE_TASK_API_TOKEN }}");
+    expect(preflight).toContain("BRAINBASE_GRAPH_API_TOKEN: ${{ secrets.BRAINBASE_GRAPH_API_TOKEN }}");
+    expect(preflight).toContain("assertBrainbaseMeetingMinutesRuntimeProjects");
+    expect(preflight).not.toContain("wrangler secret put");
   });
 
   it("provisions and passes the run-receipt credential without printing it", async () => {
