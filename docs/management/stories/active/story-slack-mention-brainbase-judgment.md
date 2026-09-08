@@ -36,7 +36,7 @@ Slackでまなへメンションする利用者として、どの配置先・チ
 - [ ] AC6: 最終回答にはHostが生成した判断監査行と、実際に発生したBrainbaseの正本参照tool callの監査行を記録順・記録回数どおり表示する。Judgment lifecycleの制御tool receiptは同一turnの識別・結果を全件検証するが、正本参照のtool journalと件数には含めない。実呼び出しが0回の場合だけHost指定の未参照行を表示し、mana-runtime側で監査文言を生成・要約・補完しない。
 - [ ] AC7: `Slack event_id`、workspace、channel、thread、Claude session、Brainbase turn、route resolution、tool journal、Stop結果、Slack `response_ts`を同じ永続的episode receiptで追跡できる。secretとSlack本文はreceiptへ保存しない。
 - [ ] AC8: 同一Slack eventの再配送・Queue retryでは完了済みepisodeと返信を重複作成しない。失敗episodeの再試行は履歴を保持した新しいattemptとして識別できる。
-- [ ] AC9: 既存の議事録Judgment lifecycle、Brainbase proxyの認証境界、通常回答のplacement認可、Slack thread返信、Queue retry契約を退行させない。返信前のbot本人確認は、許可済みの `slack.auth.test.post` を同じtenant credentialで実行する。
+- [ ] AC9: 既存の議事録Judgment lifecycle、Brainbase proxyの認証境界、通常回答のplacement認可、Slack thread返信、Queue retry契約を退行させない。返信前のbot本人確認は、許可済みの `slack.auth.test.post` を同じtenant credentialで実行する。 送信後はSlackのPOST応答で確定した本文をGET結果と厳密に照合し、絵文字・リンクの正規化で誤判定しない。channel・ts・thread・app・botの照合と重複送信防止は維持し、POST応答の必要情報が不足する場合は成功扱いにしない。
 - [ ] AC10: 本番配備後に新しいSlackメンションを1件以上発生させ、利用者に見える返信、Judgment開始、必要なBrainbase取得、Stop完了、永続receipt、Slack `response_ts`の結合を同一eventでreadbackする。未取得の証拠は`not_collected`として残す。
 
 ## 成功指標

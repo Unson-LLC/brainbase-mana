@@ -103,7 +103,8 @@ import { TaskApiClient } from "@openryoko/task-runtime-core";
 import { createMeetingMinutesTaskDeleter } from "./meeting-minutes-task-deletion.js";
 import { hasStableMeetingMinutesRecoveryAuthority, isMeetingMinutesAdminRecoveryEligible,
   meetingMinutesRecoveryAuthorityMismatches } from "./meeting-minutes-recovery-authority.js";
-import { isReplyEligible, postSlackReply, ReplyPipelineError, type ReplyProcessResult } from "./reply-pipeline.js";
+import { isReplyEligible, postSlackReply, ReplyPipelineError, type ReplyProcessResult,
+  type SlackPostResponseObservation } from "./reply-pipeline.js";
 import { executeReplyRuntime } from "./reply-runtime-execution.js";
 import { readReplyJudgmentEpisode } from "./reply-judgment.js";
 import { resolveActorIdentityResolverFromEnv } from "./slack-actor-identity.js";
@@ -2546,6 +2547,7 @@ export async function executeCompanyAuthorityReplyOperation(
         projectCodes: [expectedScope.project_id], actorIdHash: await actorIdHash(event),
         workerVersion: env.CF_VERSION_METADATA?.id, model: claudeRuntime.model, effort: claudeRuntime.effort };
       let observedTs: string | undefined;
+      let postedSlackMessage: SlackPostResponseObservation | undefined;
       let deliveryBodyHash: string | undefined;
       let authBotId: string | undefined;
       let deliveryAttempted = false;
@@ -2628,11 +2630,25 @@ export async function executeCompanyAuthorityReplyOperation(
                   event: replyEvent, text, effect_id: effectId, release_on_failure: false,
                   post: () => {
                     deliveryAttempted = true;
-                    return postSlackReply(replyEvent, text, { fetch: brokerFetch, provider_key: providerKey });
+                    return postSlackReply(replyEvent, text, {
+                      fetch: brokerFetch,
+                      provider_key: providerKey,
+                      onPosted: (observation) => {
+                        observedTs = observation.responseTs;
+                        postedSlackMessage = observation;
+                      },
+                    });
                   },
                 }));
                 observedTs = ts;
-                const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(escapeUntrustedSlackMrkdwn(text)));
+                const canonicalText = postedSlackMessage?.responseTs === ts
+                  && postedSlackMessage.responseChannel === replyEvent.channelId
+                  && postedSlackMessage.messageTs === ts
+                  && typeof postedSlackMessage.messageText === "string"
+                  ? postedSlackMessage.messageText
+                  : undefined;
+                if (canonicalText === undefined) throw new Error("SLACK_READBACK_invalid_response");
+                const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalText));
                 const bodyHash = `sha256:${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
                 deliveryBodyHash = bodyHash;
                 const readback = await readSlackDeliveryReadback({ observed: { channel: replyEvent.channelId, ts },
