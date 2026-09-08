@@ -308,6 +308,48 @@ describe("TechKnight Slack reply pipeline", () => {
     expect(sandbox.exec).not.toHaveBeenCalled();
   });
 
+  it("keeps the original managed-process timeout when best-effort log capture fails", async () => {
+    let nowCalls = 0;
+    const { options, sandbox } = harness({
+      tenantBoundaryHandle: TENANT_BOUNDARY_A,
+      tenantBoundaryExpiresAt: new Date(REPLY_START_MS + 2_000_000).toISOString(),
+      nowMs: () => {
+        nowCalls += 1;
+        return nowCalls <= 2 ? REPLY_START_MS : REPLY_START_MS + 540_001;
+      },
+    });
+    const kill = vi.fn().mockResolvedValue(undefined);
+    const getLogs = vi.fn().mockRejectedValue(new Error("private timeout log"));
+    const startProcess = vi.fn().mockResolvedValue({
+      getStatus: vi.fn().mockResolvedValue("running"),
+      getLogs,
+      kill,
+    });
+    vi.mocked(options.createSandbox).mockReturnValue({ ...sandbox, startProcess });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await expect(generateClaudeReply(event(), options)).rejects.toThrow("sandbox_process_timeout");
+
+      expect(kill).toHaveBeenCalledOnce();
+      expect(getLogs).toHaveBeenCalledOnce();
+      const diagnostic = warning.mock.calls
+        .map(([entry]) => entry)
+        .find((entry): entry is Record<string, unknown> =>
+          typeof entry === "object" && entry !== null && entry.event === "mana_claude_timeout_diagnostics");
+      expect(diagnostic).toMatchObject({
+        event: "mana_claude_timeout_diagnostics",
+        outcome: "timeout",
+        timeoutKind: "sandbox_process_timeout",
+        diagnosticStatus: "unavailable",
+      });
+      expect(diagnostic).not.toHaveProperty("stopHookResponseCount");
+      expect(JSON.stringify(warning.mock.calls)).not.toContain("private timeout log");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it("preserves a managed process cancellation when Container cleanup also fails", async () => {
     const { options, sandbox } = harness({ tenantBoundaryHandle: TENANT_BOUNDARY_A });
     const cancellation = new Error("Canceled");

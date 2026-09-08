@@ -1,4 +1,7 @@
-import { replyToolFailureDiagnostics } from "./reply-tool-failure-diagnostics.js";
+import {
+  replyClaudeTimeoutDiagnostics,
+  replyToolFailureDiagnostics,
+} from "./reply-tool-failure-diagnostics.js";
 import type { SlackQueueEvent } from "./types.js";
 import {
   isReplyCompleted,
@@ -57,6 +60,7 @@ const SLACK_REACTION_TIMEOUT_MS = 5_000;
 // granting every attempt a fresh lease. The nine-minute process ceiling leaves
 // one minute within the ten-minute requested-action capability window.
 const REPLY_SANDBOX_MAX_TIMEOUT_MS = 540_000;
+const REPLY_TIMEOUT_LOG_CAPTURE_TIMEOUT_MS = 2_000;
 const REPLY_TENANT_BOUNDARY_SAFETY_MARGIN_MS = 30_000;
 const REPLY_AUDIT_FAILURE_CODE = "reply_judgment_tool_audit_mismatch_posttool_receipt_binding_missing";
 const REPLY_FAILURE_NOTICE_TEXT = "処理結果の確認でエラーが起きました。依頼された操作が完了したかは、まだ確認できていません。";
@@ -72,6 +76,61 @@ interface ExecResult {
   duration?: number;
   /** Legacy adapter field retained for callers that have not adopted duration. */
   elapsedMs?: number;
+}
+
+type ReplyManagedProcess = {
+  getLogs(): Promise<{ stdout: string; stderr: string }>;
+  kill(signal?: string): Promise<void>;
+};
+
+type ReplyTimeoutKind = "sandbox_process_timeout";
+
+type ReplyProcessLogs = { stdout: string; stderr: string };
+
+function processLogs(value: unknown): value is ReplyProcessLogs {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.stdout === "string" && typeof candidate.stderr === "string";
+}
+
+async function getTimeoutProcessLogsBestEffort(
+  process: ReplyManagedProcess,
+): Promise<ReplyProcessLogs | undefined> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(processLogs(value) ? value : undefined);
+    };
+    timer = setTimeout(() => finish(undefined), REPLY_TIMEOUT_LOG_CAPTURE_TIMEOUT_MS);
+    try {
+      process.getLogs().then(finish, () => finish(undefined));
+    } catch {
+      finish(undefined);
+    }
+  });
+}
+
+async function emitReplyTimeoutDiagnostics(
+  process: ReplyManagedProcess,
+  event: SlackQueueEvent,
+  trace: TurnRuntimeTrace,
+  timeoutKind: ReplyTimeoutKind,
+): Promise<void> {
+  try {
+    const logs = await getTimeoutProcessLogsBestEffort(process);
+    emitTurnLog("warn", "mana_claude_timeout_diagnostics", event, trace, {
+      outcome: "timeout",
+      timeoutKind,
+      diagnosticStatus: logs ? "captured" : "unavailable",
+      ...(logs ? replyClaudeTimeoutDiagnostics(logs.stdout) : {}),
+    });
+  } catch {
+    // A diagnostic sink must never replace the original timeout outcome.
+  }
 }
 
 export interface ReplySandbox {
@@ -539,6 +598,14 @@ export async function generateClaudeReply(
       });
       const deadline = (options.nowMs?.() ?? Date.now()) + REPLY_SANDBOX_MAX_TIMEOUT_MS;
       let status = await process.getStatus();
+      const diagnoseTimeout = async (timeoutKind: ReplyTimeoutKind) => {
+        try {
+          await process.kill();
+        } catch {
+          // Keep collecting diagnostics even when process termination fails.
+        }
+        await emitReplyTimeoutDiagnostics(process, event, trace, timeoutKind);
+      };
       while (status === "starting" || status === "running") {
         const nowMs = options.nowMs?.() ?? Date.now();
         let boundaryRemainingMs: number;
@@ -548,12 +615,16 @@ export async function generateClaudeReply(
             nowMs,
           );
         } catch (cause) {
-          await process.kill().catch(() => undefined);
+          try {
+            await process.kill();
+          } catch {
+            // Preserve the tenant-boundary failure as the primary outcome.
+          }
           throw cause;
         }
         const remainingMs = Math.min(deadline - nowMs, boundaryRemainingMs);
         if (remainingMs <= 0) {
-          await process.kill().catch(() => undefined);
+          await diagnoseTimeout("sandbox_process_timeout");
           throw new Error("sandbox_process_timeout");
         }
         await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, remainingMs)));

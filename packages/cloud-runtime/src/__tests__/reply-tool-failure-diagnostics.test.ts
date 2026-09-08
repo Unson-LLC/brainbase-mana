@@ -1,4 +1,7 @@
-import { replyToolFailureDiagnostics } from "../reply-tool-failure-diagnostics.js";
+import {
+  replyClaudeTimeoutDiagnostics,
+  replyToolFailureDiagnostics,
+} from "../reply-tool-failure-diagnostics.js";
 const name = "mcp__brainbase__brainbase_resolve_turn";
 const stream = (blocks: unknown[]) => blocks.map((block) => JSON.stringify({ message: { content: [block] } })).join("\n");
 const initializedStream = (status: string, tools: string[], blocks: unknown[]) => [
@@ -132,4 +135,80 @@ it("keeps only fixed JSON-RPC error codes", () => {
     { type: "tool_result", tool_use_id: "1", is_error: true, content: JSON.stringify({ code: -32001, message: "private" }) },
   ]));
   expect(unknown[0]).not.toHaveProperty("jsonRpcErrorCode");
+});
+
+it("extracts fixed timeout metadata without exposing private stream content", () => {
+  const secret = "private-timeout-stream-secret";
+  const stop = {
+    type: "system",
+    subtype: "hook_response",
+    hook_event: "Stop",
+    exit_code: 2,
+    outcome: "error",
+    stdout: JSON.stringify({
+      decision: "block",
+      reason: `judgment_hook_stop_repair_incomplete ${secret}`,
+    }),
+    stderr: `private stderr ${secret}`,
+  };
+  const stateRecord = {
+    type: "assistant",
+    message: { content: [{
+      type: "tool_use",
+      id: secret,
+      name: "mcp__brainbase__brainbase_judgment_state_record",
+      input: { private: secret },
+    }] },
+  };
+  const result = {
+    type: "result",
+    result: `private result ${secret}`,
+  };
+
+  const output = replyClaudeTimeoutDiagnostics([stop, stateRecord, result]
+    .map((entry) => JSON.stringify(entry)).join("\n"));
+
+  expect(output).toEqual({
+    streamStatus: "result_observed",
+    stopHookResponseCount: 1,
+    decisionBlockCount: 1,
+    exitErrorCount: 1,
+    hookCodes: ["judgment_hook_stop_repair_incomplete"],
+    stateRecordToolUseCount: 1,
+    resultEventPresent: true,
+  });
+  expect(JSON.stringify(output)).not.toContain(secret);
+});
+
+it("marks a secret-containing partial stream without treating it as complete", () => {
+  const secret = "private-partial-stream-secret";
+  const stop = {
+    type: "system",
+    subtype: "hook_response",
+    hook_event_name: "Stop",
+    exit_code: 0,
+    outcome: "success",
+    stdout: JSON.stringify({
+      decision: "block",
+      reason: `private reason ${secret}`,
+    }),
+  };
+  const partial = [
+    JSON.stringify(stop),
+    `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__brainbase__brainbase_judgment_state_record","input":{"secret":"${secret}"}}]}}`,
+    "{\"type\":\"result\"",
+  ].join("\n");
+
+  const output = replyClaudeTimeoutDiagnostics(partial);
+
+  expect(output).toMatchObject({
+    streamStatus: "partial",
+    stopHookResponseCount: 1,
+    decisionBlockCount: 1,
+    exitErrorCount: 0,
+    stateRecordToolUseCount: 1,
+    resultEventPresent: false,
+  });
+  expect(output.hookCodes).toEqual([]);
+  expect(JSON.stringify(output)).not.toContain(secret);
 });

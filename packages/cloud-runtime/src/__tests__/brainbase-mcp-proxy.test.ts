@@ -220,6 +220,283 @@ describe("Brainbase judgment Hook proxy", () => {
     expect(fetchImpl).toHaveBeenCalledWith("https://bb.unson.jp/runtime-mcp/host/judgment/hook", expect.objectContaining({ method: "POST", redirect: "manual" }));
   });
 
+  it("records bounded Stop diagnostics while preserving a valid Host response", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const upstreamBody = {
+      schema_version: "1",
+      accepted: true,
+      hook_event_name: "Stop",
+      session_id: "session-secret",
+      turn_id: "turn-secret",
+      output: {
+        decision: "block",
+        reason: "mcp__brainbase__brainbase_knowledge_resolve を実行してください\n🧠 判断参照: private audit\n📚 Brainbase private audit",
+        systemMessage: "Bearer private system message",
+      },
+    };
+    const fetchImpl = vi.fn(async () => Response.json(upstreamBody, { status: 200 })) as unknown as typeof fetch;
+    try {
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/host/judgment/hook", {
+          method: "POST",
+          body: JSON.stringify({
+            hook_event_name: "Stop",
+            stop_hook_active: true,
+            session_id: "request-session-secret",
+            turn_id: "request-turn-secret",
+            transcript: "Bearer request transcript secret",
+          }),
+        }),
+        {
+          BRAINBASE_MCP_BASE_URL: "https://bb.example.test",
+          BRAINBASE_MCP_TOKEN: "token-secret",
+          BRAINBASE_JUDGMENT_PROJECT_CODE: "mana",
+        },
+        fetchImpl,
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(upstreamBody);
+      const entries = log.mock.calls.map(([line]) => JSON.parse(String(line)));
+      expect(entries).toEqual([
+        {
+          event: "brainbase_judgment_hook_diagnostic",
+          phase: "request_received",
+          hook_event_name: "Stop",
+          stop_hook_active: true,
+        },
+        {
+          event: "brainbase_judgment_hook_diagnostic",
+          phase: "response",
+          status: 200,
+          response_kind: "block",
+          decision: "block",
+          stop_hook_active: true,
+          has_reason: true,
+          has_system_message: true,
+          has_judgment_audit: true,
+          has_brainbase_audit: true,
+          model_action_requested: true,
+          error_code: null,
+        },
+      ]);
+      expect(JSON.stringify(entries)).not.toMatch(/secret|Bearer|private/iu);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("keeps only allowlisted error codes from an invalid response", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const body = JSON.stringify({
+      error: "judgment_episode_not_found",
+      secret: "private response detail",
+    });
+    const fetchImpl = vi.fn(async () => new Response(body, {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+    try {
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/host/judgment/hook", {
+          method: "POST",
+          body: JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false }),
+        }),
+        {
+          BRAINBASE_MCP_BASE_URL: "https://bb.example.test",
+          BRAINBASE_MCP_TOKEN: "token-secret",
+          BRAINBASE_JUDGMENT_PROJECT_CODE: "mana",
+        },
+        fetchImpl,
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe(body);
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+        {
+          event: "brainbase_judgment_hook_diagnostic",
+          phase: "request_received",
+          hook_event_name: "Stop",
+          stop_hook_active: false,
+        },
+        {
+          event: "brainbase_judgment_hook_diagnostic",
+          phase: "response",
+          status: 404,
+          response_kind: "invalid",
+          decision: "invalid",
+          stop_hook_active: false,
+          has_reason: false,
+          has_system_message: false,
+          has_judgment_audit: false,
+          has_brainbase_audit: false,
+          model_action_requested: false,
+          error_code: "judgment_episode_not_found",
+        },
+      ]);
+      expect(JSON.stringify(log.mock.calls)).not.toMatch(/private response detail/iu);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("marks malformed and secret-containing responses invalid without logging their contents", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const malformed = '{"schema_version":"1","accepted":true,"hook_event_name":"Stop","output":{"decision":"block","reason":"secret';
+    const fetchImpl = vi.fn(async () => new Response(malformed, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+    try {
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/host/judgment/hook", {
+          method: "POST",
+          body: JSON.stringify({ hook_event_name: "Stop", stop_hook_active: true }),
+        }),
+        {
+          BRAINBASE_MCP_BASE_URL: "https://bb.example.test",
+          BRAINBASE_MCP_TOKEN: "token-secret",
+          BRAINBASE_JUDGMENT_PROJECT_CODE: "mana",
+        },
+        fetchImpl,
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(malformed);
+
+      const entries = log.mock.calls.map(([line]) => JSON.parse(String(line)));
+      expect(entries).toEqual([
+        {
+          event: "brainbase_judgment_hook_diagnostic",
+          phase: "request_received",
+          hook_event_name: "Stop",
+          stop_hook_active: true,
+        },
+        {
+          event: "brainbase_judgment_hook_diagnostic",
+          phase: "response",
+          status: 200,
+          response_kind: "invalid",
+          decision: "invalid",
+          stop_hook_active: true,
+          has_reason: false,
+          has_system_message: false,
+          has_judgment_audit: false,
+          has_brainbase_audit: false,
+          model_action_requested: false,
+          error_code: null,
+        },
+      ]);
+      expect(JSON.stringify(entries)).not.toMatch(/secret/iu);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("classifies unknown output fields as invalid instead of empty", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const upstreamBody = {
+      schema_version: "1",
+      accepted: true,
+      hook_event_name: "Stop",
+      output: { foo: "secret output" },
+    };
+    const fetchImpl = vi.fn(async () => Response.json(upstreamBody, { status: 200 })) as unknown as typeof fetch;
+    try {
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/host/judgment/hook", {
+          method: "POST",
+          body: JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false }),
+        }),
+        {
+          BRAINBASE_MCP_BASE_URL: "https://bb.example.test",
+          BRAINBASE_MCP_TOKEN: "token-secret",
+          BRAINBASE_JUDGMENT_PROJECT_CODE: "mana",
+        },
+        fetchImpl,
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(upstreamBody);
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+        {
+          event: "brainbase_judgment_hook_diagnostic",
+          phase: "request_received",
+          hook_event_name: "Stop",
+          stop_hook_active: false,
+        },
+        {
+          event: "brainbase_judgment_hook_diagnostic",
+          phase: "response",
+          status: 200,
+          response_kind: "invalid",
+          decision: "absent",
+          stop_hook_active: false,
+          has_reason: false,
+          has_system_message: false,
+          has_judgment_audit: false,
+          has_brainbase_audit: false,
+          model_action_requested: false,
+          error_code: null,
+        },
+      ]);
+      expect(JSON.stringify(log.mock.calls)).not.toMatch(/secret output/iu);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("does not expose secret fields from a valid response envelope", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const upstreamBody = {
+      schema_version: "1",
+      accepted: true,
+      hook_event_name: "Stop",
+      output: {
+        decision: "block",
+        reason: "Bearer private reason",
+        systemMessage: "private system message",
+        error: "private error code",
+        private_field: "private field value",
+      },
+      private_envelope_field: "private envelope value",
+    };
+    const fetchImpl = vi.fn(async () => Response.json(upstreamBody, { status: 200 })) as unknown as typeof fetch;
+    try {
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/host/judgment/hook", {
+          method: "POST",
+          body: JSON.stringify({ hook_event_name: "Stop", stop_hook_active: true }),
+        }),
+        {
+          BRAINBASE_MCP_BASE_URL: "https://bb.example.test",
+          BRAINBASE_MCP_TOKEN: "token-secret",
+          BRAINBASE_JUDGMENT_PROJECT_CODE: "mana",
+        },
+        fetchImpl,
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(upstreamBody);
+
+      const entries = log.mock.calls.map(([line]) => JSON.parse(String(line)));
+      expect(entries[1]).toEqual({
+        event: "brainbase_judgment_hook_diagnostic",
+        phase: "response",
+        status: 200,
+        response_kind: "block",
+        decision: "block",
+        stop_hook_active: true,
+        has_reason: true,
+        has_system_message: true,
+        has_judgment_audit: false,
+        has_brainbase_audit: false,
+        model_action_requested: false,
+        error_code: null,
+      });
+      expect(JSON.stringify(entries)).not.toMatch(/Bearer|private/iu);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("rejects upstream redirects without following them", async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://evil.example" } })) as unknown as typeof fetch;
     const response = await handleBrainbaseMcpProxyRequest(
