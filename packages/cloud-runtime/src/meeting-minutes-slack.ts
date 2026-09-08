@@ -58,6 +58,17 @@ export function destinationSelectedMessage(runId: string, fileName: string,
   ] };
 }
 
+/** Durable follow-up for the original selector once the processing reply exists. */
+export function destinationSelectionCompletedMessage(fileName: string,
+  destination: MeetingMinutesDestination): Pick<SlackSelectionMessage, "text" | "blocks"> {
+  const safeFileName = escapeUntrustedSlackMrkdwn(fileName);
+  return {
+    text: `${safeFileName} の保存先に ${destination.name} が選択されました。最新の状況は、このスレッドの最新の案内を確認してください。`,
+    blocks: [{ type: "section", text: { type: "mrkdwn",
+      text: `*✅ 保存先が選択されました*\n保存先: ${destination.name}\n最新の状況は、このスレッドの最新の案内を確認してください。` } }],
+  };
+}
+
 /** Short-lived acknowledgement shown while a routing action waits on its next step. */
 export function interactionPendingMessage(fileName: string, status: string): SlackSelectionMessage {
   const safeFileName = escapeUntrustedSlackMrkdwn(fileName);
@@ -411,6 +422,26 @@ export class MeetingMinutesSlackClient {
       text: message.text, client_msg_id: await clientMessageId(`${run.runId}-selection`), blocks: message.blocks });
     if (!result.ts) throw new Error("slack_response_ts_missing"); return result.ts;
   }
+  /**
+   * Ends a persisted destination selector after its durable processing card is
+   * known. This is deliberately best-effort: a stale selector must not turn a
+   * completed run or its task-only retry into a projection failure.
+   */
+  private async terminalizeDestinationSelection(run: MeetingMinutesRun, processingTs: string): Promise<void> {
+    const selectionTs = run.slack?.selectionTs;
+    if (!selectionTs || !run.destination || selectionTs === processingTs
+      || selectionTs === run.sourceThreadTs || selectionTs === run.sourceMessageTs) return;
+    const message = destinationSelectionCompletedMessage(run.file.name, run.destination);
+    try {
+      await this.post("chat.update", { channel: run.sourceChannelId, ts: selectionTs,
+        text: message.text, blocks: message.blocks });
+    } catch (error) {
+      console.error(JSON.stringify({ event: "meeting_minutes_selection_terminal_projection_failed",
+        runId: run.runId, stage: "status_projection", code: "STATUS_PROJECTION_FAILED",
+        correlation_id: deriveCorrelationId(run.runId, "status_projection", "STATUS_PROJECTION_FAILED"), retryable: true,
+        ...(error instanceof Error ? { error_name: error.name.slice(0, 64) } : {}) }));
+    }
+  }
   async postIntakePaused(channelId: string, threadTs: string, eventId?: string): Promise<void> {
     const seed = eventId?.trim() || `legacy-intake:${channelId}:${threadTs}`;
     const correlationId = deriveCorrelationId(seed, "intake", "INTAKE_PAUSED");
@@ -442,6 +473,9 @@ export class MeetingMinutesSlackClient {
       text: `${escapeUntrustedSlackMrkdwn(run.file.name)} の議事録を作成しています。`, client_msg_id: await clientMessageId(`${run.runId}-processing`),
       blocks: [{ type: "section", text: { type: "mrkdwn", text: `*⏳ 議事録を作成中…*\n保存先: ${run.destination.name}\n完了すると共有先へ投稿します。` } }] });
     if (!result.ts) throw new Error("slack_response_ts_missing");
+    // Keep the processing reply as the durable status card. The original
+    // selector is terminalized only after that reply exists.
+    await this.terminalizeDestinationSelection(run, result.ts);
     return result.ts;
   }
   async showProcessingStatus(channelId: string, threadTs: string, destinationName: string): Promise<void> {
@@ -557,6 +591,10 @@ export class MeetingMinutesSlackClient {
           sourceThreadTs: run.sourceThreadTs }) }] });
     }
     await this.post("chat.update", { channel: run.sourceChannelId, ts: run.slack.processingTs, text: userText, blocks });
+    // A task-only retry reaches this common status projection with an already
+    // persisted processingTs. Reapply the selector terminalization here so
+    // legacy runs converge without changing their revision or external output.
+    await this.terminalizeDestinationSelection(run, run.slack.processingTs);
     if (outcome !== "completed" || !terminalReadback) return;
     await this.confirmTerminalRunStatus(run, terminalReadback);
   }
