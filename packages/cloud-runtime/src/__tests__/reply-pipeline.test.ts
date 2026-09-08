@@ -350,6 +350,159 @@ describe("TechKnight Slack reply pipeline", () => {
     }
   });
 
+  it("keeps timeout diagnostics bounded when managed-process kill never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      let nowCalls = 0;
+      const { options, sandbox } = harness({
+        tenantBoundaryHandle: TENANT_BOUNDARY_A,
+        tenantBoundaryExpiresAt: new Date(REPLY_START_MS + 2_000_000).toISOString(),
+        nowMs: () => {
+          nowCalls += 1;
+          return nowCalls <= 2 ? REPLY_START_MS : REPLY_START_MS + 540_001;
+        },
+      });
+      const diagnosticCalls: string[] = [];
+      const kill = vi.fn().mockImplementation(() => {
+        diagnosticCalls.push("kill");
+        return new Promise<void>(() => {});
+      });
+      const getLogs = vi.fn().mockImplementation(() => {
+        diagnosticCalls.push("getLogs");
+        return Promise.resolve({ stdout: auditedReplyStream(), stderr: "" });
+      });
+      const startProcess = vi.fn().mockResolvedValue({
+        getStatus: vi.fn().mockResolvedValue("running"),
+        getLogs,
+        kill,
+      });
+      vi.mocked(options.createSandbox).mockReturnValue({ ...sandbox, startProcess });
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      try {
+        const diagnosticsStartedAt = Date.now();
+        const reply = generateClaudeReply(event(), options);
+        const expectedFailure = expect(reply).rejects.toThrow("sandbox_process_timeout");
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expectedFailure;
+
+        expect(kill).toHaveBeenCalledOnce();
+        expect(getLogs).toHaveBeenCalledOnce();
+        expect(diagnosticCalls).toEqual(["kill", "getLogs"]);
+        expect(Date.now() - diagnosticsStartedAt).toBeLessThanOrEqual(2_000);
+        const diagnostic = warning.mock.calls
+          .map(([entry]) => entry)
+          .find((entry): entry is Record<string, unknown> =>
+            typeof entry === "object" && entry !== null && entry.event === "mana_claude_timeout_diagnostics");
+        expect(diagnostic).toMatchObject({
+          event: "mana_claude_timeout_diagnostics",
+          outcome: "timeout",
+          timeoutKind: "sandbox_process_timeout",
+          diagnosticStatus: "partial",
+          streamStatus: "result_observed",
+        });
+      } finally {
+        warning.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps timeout diagnostics unavailable when kill never settles and logs fail", async () => {
+    vi.useFakeTimers();
+    try {
+      let nowCalls = 0;
+      const { options, sandbox } = harness({
+        tenantBoundaryHandle: TENANT_BOUNDARY_A,
+        tenantBoundaryExpiresAt: new Date(REPLY_START_MS + 2_000_000).toISOString(),
+        nowMs: () => {
+          nowCalls += 1;
+          return nowCalls <= 2 ? REPLY_START_MS : REPLY_START_MS + 540_001;
+        },
+      });
+      const kill = vi.fn().mockImplementation(() => new Promise<void>(() => {}));
+      const getLogs = vi.fn().mockRejectedValue(new Error("private timeout log"));
+      const startProcess = vi.fn().mockResolvedValue({
+        getStatus: vi.fn().mockResolvedValue("running"),
+        getLogs,
+        kill,
+      });
+      vi.mocked(options.createSandbox).mockReturnValue({ ...sandbox, startProcess });
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      try {
+        const reply = generateClaudeReply(event(), options);
+        const expectedFailure = expect(reply).rejects.toThrow("sandbox_process_timeout");
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expectedFailure;
+
+        expect(kill).toHaveBeenCalledOnce();
+        expect(getLogs).toHaveBeenCalledOnce();
+        const diagnostic = warning.mock.calls
+          .map(([entry]) => entry)
+          .find((entry): entry is Record<string, unknown> =>
+            typeof entry === "object" && entry !== null && entry.event === "mana_claude_timeout_diagnostics");
+        expect(diagnostic).toMatchObject({
+          event: "mana_claude_timeout_diagnostics",
+          outcome: "timeout",
+          timeoutKind: "sandbox_process_timeout",
+          diagnosticStatus: "unavailable",
+        });
+        expect(diagnostic).not.toHaveProperty("streamStatus");
+        expect(JSON.stringify(warning.mock.calls)).not.toContain("private timeout log");
+      } finally {
+        warning.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks captured timeout diagnostics partial when kill fails", async () => {
+    let nowCalls = 0;
+    const { options, sandbox } = harness({
+      tenantBoundaryHandle: TENANT_BOUNDARY_A,
+      tenantBoundaryExpiresAt: new Date(REPLY_START_MS + 2_000_000).toISOString(),
+      nowMs: () => {
+        nowCalls += 1;
+        return nowCalls <= 2 ? REPLY_START_MS : REPLY_START_MS + 540_001;
+      },
+    });
+    const kill = vi.fn().mockRejectedValue(new Error("kill failed"));
+    const getLogs = vi.fn().mockResolvedValue({ stdout: auditedReplyStream(), stderr: "" });
+    const startProcess = vi.fn().mockResolvedValue({
+      getStatus: vi.fn().mockResolvedValue("running"),
+      getLogs,
+      kill,
+    });
+    vi.mocked(options.createSandbox).mockReturnValue({ ...sandbox, startProcess });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      const reply = generateClaudeReply(event(), options);
+      await expect(reply).rejects.toThrow("sandbox_process_timeout");
+
+      expect(kill).toHaveBeenCalledOnce();
+      expect(getLogs).toHaveBeenCalledOnce();
+      const diagnostic = warning.mock.calls
+        .map(([entry]) => entry)
+        .find((entry): entry is Record<string, unknown> =>
+          typeof entry === "object" && entry !== null && entry.event === "mana_claude_timeout_diagnostics");
+      expect(diagnostic).toMatchObject({
+        event: "mana_claude_timeout_diagnostics",
+        outcome: "timeout",
+        timeoutKind: "sandbox_process_timeout",
+        diagnosticStatus: "partial",
+        streamStatus: "result_observed",
+      });
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it("preserves a managed process cancellation when Container cleanup also fails", async () => {
     const { options, sandbox } = harness({ tenantBoundaryHandle: TENANT_BOUNDARY_A });
     const cancellation = new Error("Canceled");
