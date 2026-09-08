@@ -1172,8 +1172,12 @@ function createTenantInteractionEffectResolver(env: Env) {
         || tenantContext.placement.profile !== sourceTenantContext.placement.profile) {
         deny("worker_ingress", "CROSS_TENANT_CANDIDATE");
       }
+      // Bind connection verification and credentials to this signed child operation.
+      const effectClients = companyAuthority
+        ? tenantRuntimeClients(env, tenantContext, tenantInteractionDesiredEffectByCapability(env))
+        : clients;
       const verifier = new TenantRuntimeBoundaryVerifier({
-        read_authoritative_snapshot: (connectionId) => clients.authority.read_workspace_connection(connectionId),
+        read_authoritative_snapshot: (connectionId) => effectClients.authority.read_workspace_connection(connectionId),
         resolve_verification_key: (keyId) => resolveTenantVerificationKey(env, keyId),
       });
       const expectedScope: ExpectedTenantScope = {
@@ -1188,17 +1192,17 @@ function createTenantInteractionEffectResolver(env: Env) {
         capability_id: requiredRuntimeBinding(env.MANA_REQUIRED_CAPABILITY_ID),
         deployment_id: tenantContext.placement.deployment_id,
       };
-      return { tenantContext, verifier, expectedScope, now: new Date().toISOString() };
+      return { tenantContext, clients: effectClients, verifier, expectedScope, now: new Date().toISOString() };
     };
     const createCredentialFetch = (effect: Awaited<ReturnType<typeof resolveEffect>>) => createTenantCredentialFetch({
       envelope: effect.tenantContext,
       expected_scope: effect.expectedScope,
-      broker: clients.credential_broker,
+      broker: effect.clients.credential_broker,
       trusted_forwarder: createBrainbaseTrustedProviderForwarderFromEnv({
         env,
         tenant_context: effect.tenantContext,
       }),
-      read_authoritative_snapshot: () => clients.authority.read_workspace_connection(
+      read_authoritative_snapshot: () => effect.clients.authority.read_workspace_connection(
         effect.tenantContext.workspace_connection.connection_id),
       resolve_verification_key: (keyId) => resolveTenantVerificationKey(env, keyId),
       now: () => new Date().toISOString(),
@@ -1219,8 +1223,8 @@ function createTenantInteractionEffectResolver(env: Env) {
         tenant_context: effect.tenantContext,
         expected_scope: effect.expectedScope,
         verifier: effect.verifier,
-        quota: clients.quota,
-        accounting: clients.accounting,
+        quota: effect.clients.quota,
+        accounting: effect.clients.accounting,
         ledger: createDurableTenantAccountingClient(env.TENANT_RUNTIME_STATE, effect.tenantContext),
         usage_unit: "interaction_effect",
         now: () => new Date().toISOString(),
@@ -1257,7 +1261,7 @@ function createTenantInteractionEffectResolver(env: Env) {
             expected_scope: effect.expectedScope,
             ownership: createDurableTenantStateClient(env.TENANT_RUNTIME_STATE,
               effect.tenantContext.tenant.tenant_id),
-            read_authoritative_snapshot: () => clients.authority.read_workspace_connection(
+            read_authoritative_snapshot: () => effect.clients.authority.read_workspace_connection(
               effect.tenantContext.workspace_connection.connection_id,
             ),
             resolve_verification_key: (keyId) => resolveTenantVerificationKey(env, keyId),
@@ -1279,8 +1283,8 @@ function createTenantInteractionEffectResolver(env: Env) {
           tenant_context: effect.tenantContext,
           expected_scope: effect.expectedScope,
           verifier: effect.verifier,
-          quota: clients.quota,
-          accounting: clients.accounting,
+          quota: effect.clients.quota,
+          accounting: effect.clients.accounting,
           ledger: createDurableTenantAccountingClient(env.TENANT_RUNTIME_STATE, effect.tenantContext),
           usage_unit: "interaction_effect",
           now: () => new Date().toISOString(),

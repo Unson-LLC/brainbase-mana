@@ -973,6 +973,7 @@ const SLACK_INTAKE_SAFE_CODES = new Set([
   "CREDENTIAL_LEASE_EXPIRED", "CREDENTIAL_LEASE_INVALID", "SERVICE_AUTH_REQUIRED",
   "SCHEMA_INVALID", "UPSTREAM_INVALID_RESPONSE", "UPSTREAM_UNAVAILABLE",
   "REPLY_OWNERSHIP_CONFLICT", "QUOTA_EXCEEDED", "WORKSPACE_CONNECTION_INACTIVE",
+  "WORKSPACE_CONNECTION_UNAVAILABLE", "WORKSPACE_CONNECTION_STALE_REVISION",
   "slack_bot_token_not_configured", "slack_api_unavailable", "slack_api_timeout",
   "slack_api_aborted", "slack_api_invalid_response", "slack_reaction_rejected",
   "slack_status_rejected", "missing_scope", "not_authed", "invalid_auth",
@@ -984,7 +985,7 @@ const SLACK_INTAKE_SAFE_CODES = new Set([
 ]);
 const SLACK_INTAKE_SAFE_BOUNDARIES = new Set([
   "worker_ingress", "queue_consumer", "durable_object", "container_launch",
-  "mcp_gateway", "brainbase_proxy", "slack_delivery", "credential_lease",
+  "mcp_gateway", "brainbase_proxy", "slack_delivery", "credential_lease", "workspace_connection",
 ]);
 
 function slackIntakeFailure(error: unknown): { code: string; boundary?: string; http_status?: number } {

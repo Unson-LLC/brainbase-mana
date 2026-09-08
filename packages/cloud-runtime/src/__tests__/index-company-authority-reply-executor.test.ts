@@ -717,6 +717,111 @@ describe("Company Authority runtime.execute reply executor", () => {
     expect(runtimeMocks.slackRequests.filter(({ request }) => request.url.endsWith("chat.postMessage"))).toHaveLength(1);
   });
 
+  it("binds authoritative snapshot reads to each derived intake effect client", async () => {
+    runtimeMocks.reissueCompanyAuthorityTenantContext.mockImplementation(async ({ request }) => ({
+      ...tenantContext(),
+      correlation_id: request.correlation_id,
+      operation_id: `op_${request.correlation_id}`,
+      slack: { ...tenantContext().slack, event_id: request.delivery.event_id },
+    }));
+    const httpValidationContexts: Array<ReturnType<typeof tenantContext>> = [];
+    const actualHttpClients = await vi.importActual<typeof import("../multitenancy/http-clients.js")>(
+      "../multitenancy/http-clients.js",
+    );
+    runtimeMocks.createClients.mockImplementation((input: Record<string, unknown>) => {
+      runtimeMocks.createClientsInputs.push(input);
+      return actualHttpClients.createTenantRuntimeHttpClients({
+        ...input,
+        service: {
+          fetch: async (request: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const requestUrl = request instanceof Request ? request.url : String(request);
+            const path = new URL(requestUrl).pathname;
+            if (!path.endsWith("/workspace-connections:validate-revision")) {
+              throw new Error("unexpected_test_service_request");
+            }
+            const body = JSON.parse(String(init?.body)) as {
+              tenant_context?: ReturnType<typeof tenantContext>;
+            };
+            const context = body.tenant_context;
+            if (context?.workspace_connection?.connection_id !== connectionId) {
+              throw new Error("missing_or_mismatched_tenant_context");
+            }
+            httpValidationContexts.push(context);
+            return Response.json({
+              valid: true,
+              authoritative: true,
+              connection_revision: snapshot.connection_revision,
+              workspace_id: snapshot.workspace_id,
+              app_id: snapshot.app_id,
+              installation: {
+                installation_id: snapshot.installation_id,
+                installer_id: snapshot.installer_id,
+              },
+              granted_scopes: snapshot.granted_scopes,
+              status: snapshot.status,
+              credential: { mode: snapshot.credential_mode },
+            });
+          },
+        },
+      } as Parameters<typeof actualHttpClients.createTenantRuntimeHttpClients>[0]);
+    });
+    runtimeMocks.createCredentialFetch.mockImplementation((input: Record<string, unknown>) => {
+      runtimeMocks.credentialFetchInputs.push(input);
+      const readAuthoritativeSnapshot = input.read_authoritative_snapshot as
+        (() => Promise<unknown>) | undefined;
+      return async (request: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const requestUrl = request instanceof Request ? request.url : String(request);
+        if (/^\/api\/(reactions\.(add|remove)|assistant\.threads\.setStatus)$/.test(
+          new URL(requestUrl).pathname,
+        )) {
+          await readAuthoritativeSnapshot?.();
+        }
+        return runtimeMocks.brokerFetch(request, init);
+      };
+    });
+    runtimeMocks.brokerFetch.mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      if (/\/(reactions\.(add|remove)|assistant\.threads\.setStatus)$/.test(new URL(request.url).pathname)) {
+        runtimeMocks.slackRequests.push({ request, body: await request.clone().json() });
+        return Response.json({ ok: true });
+      }
+      return brokerFetch(input, init);
+    });
+
+    const ordinaryRuntime = runtimeMocks.executeReplyRuntime.getMockImplementation()!;
+    runtimeMocks.executeReplyRuntime.mockImplementationOnce(async (input: Record<string, unknown>) => {
+      const fetch = (input.options as { fetch: typeof globalThis.fetch }).fetch;
+      for (const [path, body] of [
+        ["reactions.add", { channel: channelId, timestamp: event().messageTs, name: "eyes" }],
+        ["assistant.threads.setStatus", { channel_id: channelId, thread_ts: threadTs, status: "分析しています…" }],
+        ["assistant.threads.setStatus", { channel_id: channelId, thread_ts: threadTs, status: "" }],
+        ["reactions.remove", { channel: channelId, timestamp: event().messageTs, name: "eyes" }],
+      ] as const) {
+        await expect(fetch(`https://slack.com/api/${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        })).resolves.toBeInstanceOf(Response);
+      }
+      return ordinaryRuntime(input);
+    });
+
+    await expect(executeCompanyAuthorityReplyOperation(runtimeEnv(), operation()))
+      .resolves.toMatchObject({ applied: true });
+    expect(httpValidationContexts).toHaveLength(4);
+    const effectContexts = runtimeMocks.credentialFetchInputs
+      .map(input => input.envelope as ReturnType<typeof tenantContext>)
+      .filter(context => context.slack.event_id !== event().eventId);
+    expect(httpValidationContexts).toEqual(effectContexts);
+    expect(new Set(httpValidationContexts.map(context => context.operation_id)).size).toBe(4);
+    expect(new Set(httpValidationContexts.map(context => context.slack.event_id)).size).toBe(4);
+    expect(httpValidationContexts.every((context) =>
+      context.workspace_connection?.connection_id === connectionId)).toBe(true);
+    expect(runtimeMocks.slackRequests.filter(({ request }) =>
+      /\/(reactions\.(add|remove)|assistant\.threads\.setStatus)$/.test(new URL(request.url).pathname),
+    )).toHaveLength(4);
+  });
+
   it.each(["source", "child"].flatMap(stage => ["actor", "project", "capability"].map(field => [stage, field])))("rejects intake %s %s drift before provider delivery", async (stage, field) => {
     let calls = 0;
     runtimeMocks.reissueCompanyAuthorityTenantContext.mockImplementation(async ({ request }) => {
