@@ -2037,6 +2037,52 @@ describe("TechKnight Slack reply pipeline", () => {
     warnSpy.mockRestore();
   });
 
+  it("preserves safe intake boundary diagnostics without leaking exception data", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const fetchMock = vi.fn().mockRejectedValue(new TenantBoundaryError(
+        "slack_delivery", "AUTHORITY_SCOPE_MISMATCH", "secret-canary-message",
+        { status: 403, token: "secret-canary-token" },
+      ));
+      await expect(withSlackThreadStatus(event(), { fetch: fetchMock }, async () => "replied"))
+        .resolves.toBe("replied");
+      const rows = warnSpy.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(rows).toHaveLength(2);
+      for (const row of rows) expect(row).toMatchObject({
+        code: "AUTHORITY_SCOPE_MISMATCH", boundary: "slack_delivery", http_status: 403,
+        event_id: event().eventId, thread_ts: event().threadTs,
+      });
+      expect(JSON.stringify(rows)).not.toContain("secret-canary");
+    } finally { warnSpy.mockRestore(); }
+  });
+
+  it.each([
+    [new DOMException("secret-canary", "TimeoutError"), "slack_api_timeout"],
+    [new DOMException("secret-canary", "AbortError"), "slack_api_aborted"],
+    [new TenantBoundaryError("secret-canary", "secret-canary"), "unknown"],
+    [new Error("secret-canary"), "slack_api_unavailable"],
+  ])("classifies intake transport failures safely (%#)", async (error, code) => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await withSlackThreadStatus(event(), { fetch: vi.fn().mockRejectedValue(error) }, async () => undefined);
+      const rows = warnSpy.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(rows).toHaveLength(2);
+      expect(rows.every((row) => row.code === code)).toBe(true);
+      expect(JSON.stringify(rows)).not.toContain("secret-canary");
+    } finally { warnSpy.mockRestore(); }
+  });
+
+  it("does not log arbitrary Slack error strings", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await withSlackThreadStatus(event(), { fetch: vi.fn().mockImplementation(async () =>
+        Response.json({ ok: false, error: "secret-canary" })) }, async () => undefined);
+      const rows = warnSpy.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(rows.every((row) => row.code === "unknown")).toBe(true);
+      expect(JSON.stringify(rows)).not.toContain("secret-canary");
+    } finally { warnSpy.mockRestore(); }
+  });
+
   it("refreshes the processing status while work is still running", async () => {
     vi.useFakeTimers();
     try {

@@ -965,14 +965,55 @@ export async function postSlackReply(
   return responsePayload.ts;
 }
 
-function logSlackStatusFailure(code: string): void {
-  const safeCode = code.replace(/[^a-z0-9_.-]/gi, "_").slice(0, 80) || "unknown";
-  console.warn(JSON.stringify({ event: "slack_thread_status_failed", code: safeCode }));
+const SLACK_INTAKE_SAFE_CODES = new Set([
+  "AUTHORITY_SCOPE_MISMATCH", "AUTHORITY_CONTEXT_EXPIRED", "AUTHORITY_CONTEXT_INVALID",
+  "TENANT_CONTEXT_INVALID", "TENANT_CONTEXT_EXPIRED", "TENANT_CONTEXT_SIGNATURE_INVALID",
+  "CROSS_TENANT_CANDIDATE", "TENANT_SCOPE_MISMATCH", "CAPABILITY_DENIED",
+  "CREDENTIAL_LEASE_SCOPE_MISMATCH", "CREDENTIAL_LEASE_ALREADY_USED",
+  "CREDENTIAL_LEASE_EXPIRED", "CREDENTIAL_LEASE_INVALID", "SERVICE_AUTH_REQUIRED",
+  "SCHEMA_INVALID", "UPSTREAM_INVALID_RESPONSE", "UPSTREAM_UNAVAILABLE",
+  "REPLY_OWNERSHIP_CONFLICT", "QUOTA_EXCEEDED", "WORKSPACE_CONNECTION_INACTIVE",
+  "slack_bot_token_not_configured", "slack_api_unavailable", "slack_api_timeout",
+  "slack_api_aborted", "slack_api_invalid_response", "slack_reaction_rejected",
+  "slack_status_rejected", "missing_scope", "not_authed", "invalid_auth",
+  "token_revoked", "account_inactive", "channel_not_found", "not_in_channel",
+  "message_not_found", "thread_not_found", "invalid_arguments", "invalid_arg_name",
+  "ratelimited", "request_timeout", "internal_error", "fatal_error",
+  "restricted_action", "method_not_supported_for_channel_type", "is_archived",
+  "unknown",
+]);
+const SLACK_INTAKE_SAFE_BOUNDARIES = new Set([
+  "worker_ingress", "queue_consumer", "durable_object", "container_launch",
+  "mcp_gateway", "brainbase_proxy", "slack_delivery", "credential_lease",
+]);
+
+function slackIntakeFailure(error: unknown): { code: string; boundary?: string; http_status?: number } {
+  if (error instanceof TenantBoundaryError) {
+    const status = error.details?.status;
+    return {
+      code: SLACK_INTAKE_SAFE_CODES.has(error.code) ? error.code : "unknown",
+      boundary: SLACK_INTAKE_SAFE_BOUNDARIES.has(error.boundary) ? error.boundary : "unknown",
+      ...(Number.isInteger(status) && Number(status) >= 100 && Number(status) <= 599
+        ? { http_status: Number(status) } : {}),
+    };
+  }
+  if (error instanceof DOMException && error.name === "TimeoutError") return { code: "slack_api_timeout" };
+  if (error instanceof DOMException && error.name === "AbortError") return { code: "slack_api_aborted" };
+  if (typeof error === "string") {
+    if (/^slack_http_[1-5][0-9]{2}$/.test(error)) return { code: error, http_status: Number(error.slice(-3)) };
+    return { code: SLACK_INTAKE_SAFE_CODES.has(error) ? error : "unknown" };
+  }
+  return { code: "slack_api_unavailable" };
 }
 
-function logSlackReactionFailure(action: "add" | "remove", code: string): void {
-  const safeCode = code.replace(/[^a-z0-9_.-]/gi, "_").slice(0, 80) || "unknown";
-  console.warn(JSON.stringify({ event: "slack_reaction_failed", action, code: safeCode }));
+function logSlackStatusFailure(event: SlackQueueEvent, error: unknown): void {
+  console.warn(JSON.stringify({ event: "slack_thread_status_failed", event_id: event.eventId,
+    thread_ts: event.threadTs, ...slackIntakeFailure(error) }));
+}
+
+function logSlackReactionFailure(event: SlackQueueEvent, action: "add" | "remove", error: unknown): void {
+  console.warn(JSON.stringify({ event: "slack_reaction_failed", event_id: event.eventId,
+    thread_ts: event.threadTs, action, ...slackIntakeFailure(error) }));
 }
 
 async function setSlackProcessingReaction(
@@ -981,7 +1022,7 @@ async function setSlackProcessingReaction(
   options: Pick<ReplyPipelineOptions, "slackBotToken" | "fetch">,
 ): Promise<boolean> {
   if (!options.slackBotToken && !options.fetch) {
-    logSlackReactionFailure(action, "slack_bot_token_not_configured");
+    logSlackReactionFailure(event, action, "slack_bot_token_not_configured");
     return false;
   }
 
@@ -1000,12 +1041,12 @@ async function setSlackProcessingReaction(
       }),
       signal: AbortSignal.timeout(SLACK_REACTION_TIMEOUT_MS),
     });
-  } catch {
-    logSlackReactionFailure(action, "slack_api_unavailable");
+  } catch (error) {
+    logSlackReactionFailure(event, action, error);
     return false;
   }
   if (!response.ok) {
-    logSlackReactionFailure(action, `slack_http_${response.status}`);
+    logSlackReactionFailure(event, action, `slack_http_${response.status}`);
     return false;
   }
 
@@ -1015,9 +1056,9 @@ async function setSlackProcessingReaction(
     const code = typeof payload.error === "string" ? payload.error : "slack_reaction_rejected";
     if (action === "add" && code === "already_reacted") return true;
     if (action === "remove" && code === "no_reaction") return true;
-    logSlackReactionFailure(action, code);
+    logSlackReactionFailure(event, action, code);
   } catch {
-    logSlackReactionFailure(action, "slack_api_invalid_response");
+    logSlackReactionFailure(event, action, "slack_api_invalid_response");
   }
   return false;
 }
@@ -1051,7 +1092,7 @@ export async function setSlackThreadStatus(
   options: Pick<ReplyPipelineOptions, "slackBotToken" | "fetch">,
 ): Promise<boolean> {
   if (!options.slackBotToken && !options.fetch) {
-    logSlackStatusFailure("slack_bot_token_not_configured");
+    logSlackStatusFailure(event, "slack_bot_token_not_configured");
     return false;
   }
 
@@ -1070,21 +1111,21 @@ export async function setSlackThreadStatus(
       }),
       signal: AbortSignal.timeout(SLACK_STATUS_TIMEOUT_MS),
     });
-  } catch {
-    logSlackStatusFailure("slack_api_unavailable");
+  } catch (error) {
+    logSlackStatusFailure(event, error);
     return false;
   }
   if (!response.ok) {
-    logSlackStatusFailure(`slack_http_${response.status}`);
+    logSlackStatusFailure(event, `slack_http_${response.status}`);
     return false;
   }
 
   try {
     const payload = await response.json() as { ok?: unknown; error?: unknown };
     if (payload.ok === true) return true;
-    logSlackStatusFailure(typeof payload.error === "string" ? payload.error : "slack_status_rejected");
+    logSlackStatusFailure(event, typeof payload.error === "string" ? payload.error : "slack_status_rejected");
   } catch {
-    logSlackStatusFailure("slack_api_invalid_response");
+    logSlackStatusFailure(event, "slack_api_invalid_response");
   }
   return false;
 }

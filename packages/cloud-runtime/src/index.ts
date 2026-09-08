@@ -105,6 +105,7 @@ import { hasStableMeetingMinutesRecoveryAuthority, isMeetingMinutesAdminRecovery
   meetingMinutesRecoveryAuthorityMismatches } from "./meeting-minutes-recovery-authority.js";
 import { isReplyEligible, postSlackReply, ReplyPipelineError, type ReplyProcessResult,
   type SlackPostResponseObservation } from "./reply-pipeline.js";
+import { assertReplyIntakeTenantBoundary, createReplyIntakeEffectFetch } from "./reply-intake-effect.js";
 import { executeReplyRuntime } from "./reply-runtime-execution.js";
 import { readReplyJudgmentEpisode } from "./reply-judgment.js";
 import { resolveActorIdentityResolverFromEnv } from "./slack-actor-identity.js";
@@ -1129,11 +1130,13 @@ function createTenantInteractionEffectResolver(env: Env) {
       resolve_verification_key: (keyId) => resolveTenantVerificationKey(env, keyId),
     });
   };
-  return async (source: TenantInteractionIdentity, destination?: MeetingMinutesDestination): Promise<TenantInteractionEffects> => {
+  return async (source: TenantInteractionIdentity, destination?: MeetingMinutesDestination,
+    replyIntakeSource?: TenantContextEnvelope): Promise<TenantInteractionEffects> => {
     const destinationAuthorization = destinationAuthorizationForSelection(env, destination);
     const sourceResolved = await resolve(source, destinationAuthorization);
     const clients = getClients();
     const sourceTenantContext = sourceResolved.tenant_context;
+    if (replyIntakeSource) assertReplyIntakeTenantBoundary(replyIntakeSource, sourceTenantContext, source.event_id);
     const resolveEffect = async (effectId: string, target: TenantInteractionTarget) => {
       const identity: TenantInteractionIdentity = {
         ...source,
@@ -1142,6 +1145,7 @@ function createTenantInteractionEffectResolver(env: Env) {
       };
       const resolved = await resolve(identity, destinationAuthorization);
       const tenantContext = resolved.tenant_context;
+      if (replyIntakeSource) assertReplyIntakeTenantBoundary(replyIntakeSource, tenantContext, identity.event_id);
       if (tenantContext.tenant.tenant_id !== sourceTenantContext.tenant.tenant_id
         || tenantContext.placement.deployment_id !== sourceTenantContext.placement.deployment_id
         || tenantContext.placement.profile !== sourceTenantContext.placement.profile) {
@@ -2506,16 +2510,15 @@ export async function executeCompanyAuthorityReplyOperation(
       }
       return activeBrokerFetch(input, init);
     };
-    // The shared pipeline's cosmetic status/reaction requests are not part of
-    // this single-effect authority. Only postReply below can send Slack writes.
-    const credentialFetch: typeof fetch = async (input, init) => {
-      const req = new Request(input, init);
-      const target = new URL(req.url);
-      if (target.hostname === "slack.com" && req.method !== "GET") {
-        deny("slack_delivery", "AUTHORITY_SCOPE_MISMATCH");
-      }
-      return boundary("brainbase_proxy", () => brokerFetch(req));
-    };
+    // Reply intake reactions/statuses are child effects of the signed source
+    // event. Keep every other Slack write fail-closed in the shared pipeline.
+    const resolveReplyIntakeEffects = createTenantInteractionEffectResolver(env);
+    const credentialFetch = createReplyIntakeEffectFetch({
+      event,
+      getTenantContext: () => activeTenantContext,
+      resolveEffects: (identity, context) => resolveReplyIntakeEffects(identity, undefined, context),
+      fallback: (req) => boundary("brainbase_proxy", () => brokerFetch(req)),
+    });
     const stub = env.TECHKNIGHT_WORKSPACE.get(env.TECHKNIGHT_WORKSPACE.idFromName(workspaceName(event)));
     return withDisposableResource(() => getWorkspace(stub as unknown as WorkspaceHandle), async (workspace) => {
       const workspaceSession = await readWorkspaceSession(workspace.fs);

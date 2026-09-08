@@ -1,0 +1,28 @@
+# DMの受付・進行表示
+
+## 原因と境界
+
+Company Authorityの通常返信経路は単一の返信を所有し、共有pipelineのSlack書込みを拒否する。共有pipelineはその経路でreactions.add/removeとassistant.threads.setStatusを実行するため、上流へ届く前に拒否される。
+
+## 修正方針
+
+既存の操作別Slack delivery portを利用し、受付操作を通常返信と別のeffectとして解決する。元の認証済み依頼のtenant、workspace、actor、project、channel、message/threadとの対応を保持する。
+
+送信可能な操作はPOSTのreactions.add/remove（eyes）とassistant.threads.setStatus（既存の処理中表示または空文字）だけとする。URL query、別host/path、別method、別宛先、余分なbody項目を通さず、検証後の値から新しいRequestを作る。通常のchat.postMessageは既存postReplyに残す。
+
+操作IDは元イベントと表示操作から安定して導出する。追加・削除・表示・解除を区別し、所有権によって同一effectの再送を防ぐ。状態表示は90秒の時刻区間を操作IDへ含め、同一区間の再試行を抑えながら既存の90秒更新を実送信する。
+
+## 診断
+
+受付失敗の既存イベントに、固定allowlistの認可コード、境界、HTTP状態、通信失敗の区分を残す。未知の値はunknownにし、Error.messageや任意detailsを出さない。診断と表示失敗は通常返信の成否を変更しない。
+
+## 検証
+
+- 現行経路が受付操作を拒否する失敗テストから修正後の成功を確認する。
+- 既存reply所有権、別宛先、未知操作、body追加、query、method、重複を検証する。
+- 認可拒否の保持と秘密値を含む例外の非出力を検証する。
+- 本番では元DMの受付表示を観測し、処理後の解除と同一スレッドへの返信1件を読戻す。検索E2Eを再生成しない。
+
+## 実装時の検証結果
+
+元のindex.tsで新しい受付成功テストがAUTHORITY_SCOPE_MISMATCHにより失敗することを確認した。診断テストは修正前5件失敗から成功へ変わった。受付・返信・既存配線の160件とcloud-runtime型検査が成功。本番の表示開始・解除は配備後に確認する。
