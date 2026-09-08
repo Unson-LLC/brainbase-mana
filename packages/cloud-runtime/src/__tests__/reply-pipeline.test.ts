@@ -1197,6 +1197,7 @@ describe("TechKnight Slack reply pipeline", () => {
         brainbase: {
           command: "node",
           args: ["/opt/mana/brainbase-mcp-server.mjs"],
+          alwaysLoad: true,
           env: { MANA_TENANT_BOUNDARY_HANDLE: TENANT_BOUNDARY_A },
         },
         "task-search": {
@@ -1229,6 +1230,7 @@ describe("TechKnight Slack reply pipeline", () => {
     expect(JSON.parse(String(writes["/tmp/mana-task-search-mcp.json"]))).toEqual({
       mcpServers: {
         brainbase: { command: "node", args: ["/opt/mana/brainbase-mcp-server.mjs"],
+          alwaysLoad: true,
           env: { MANA_TENANT_BOUNDARY_HANDLE: TENANT_BOUNDARY_A } },
         "task-search": { command: "node", args: ["/opt/mana/task-search-mcp-server.mjs"],
           env: { MANA_TENANT_BOUNDARY_HANDLE: TENANT_BOUNDARY_A } },
