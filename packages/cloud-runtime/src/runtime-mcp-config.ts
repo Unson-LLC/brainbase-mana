@@ -24,6 +24,7 @@ export class RuntimeMcpConfigError extends Error {
 const SERVER_PATHS = Object.freeze({
   nocodb: "/opt/mana/nocodb-mcp-server.mjs",
   gateway: "/opt/mana/gateway-mcp-server.mjs",
+  brainbase: "/opt/mana/brainbase-mcp-server.mjs",
 });
 
 export function buildRuntimeMcpConfig(capabilities: {
@@ -38,12 +39,18 @@ export function buildRuntimeMcpConfig(capabilities: {
   }
   const mcpServers: Record<string, RuntimeMcpServerConfig> = {};
   for (const name of capabilities.mcp) {
-    if (name === "brainbase" || name === "google-drive") {
+    if (name === "brainbase") {
+      mcpServers[name] = {
+        command: "node",
+        args: [SERVER_PATHS.brainbase],
+        env: { MANA_TENANT_BOUNDARY_HANDLE: tenantBoundaryHandle },
+      };
+      continue;
+    }
+    if (name === "google-drive") {
       mcpServers[name] = {
         type: "http",
-        url: name === "brainbase"
-          ? "https://brainbase-mcp.internal/mcp"
-          : "https://google-drive-mcp.internal/mcp",
+        url: "https://google-drive-mcp.internal/mcp",
         headers: { "x-mana-tenant-boundary-handle": tenantBoundaryHandle },
       };
       continue;
