@@ -851,6 +851,7 @@ describe("handleMeetingMinutesInteraction", () => {
     ["QUOTA_APPROVAL_REQUIRED", "administrator_action_required", true],
     ["CREDENTIAL_LEASE_EXPIRED", "reauthentication_required", true],
     ["CREDENTIAL_LEASE_INVALID", "reauthentication_required", true],
+    ["COMPANY_IDENTITY_UNRESOLVED", "temporary_failure", true],
     ["TENANT_CONTEXT_SIGNATURE_INVALID", "temporary_failure", false],
     ["TENANT_CONTEXT_INVALID", "temporary_failure", false],
     ["TENANT_CONTEXT_MISSING", "temporary_failure", false],
