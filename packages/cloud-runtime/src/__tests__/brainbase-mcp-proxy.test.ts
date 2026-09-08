@@ -418,6 +418,7 @@ describe("MCP lifecycle diagnostics", () => {
 describe("MCP transport error sanitization", () => {
   it.each([
     ["CREDENTIAL_LEASE_SCOPE_MISMATCH", 403, { safeError: "CREDENTIAL_LEASE_SCOPE_MISMATCH", upstreamStatus: 403 }],
+    ["CREDENTIAL_LEASE_BINDING_MISMATCH", 403, { safeError: "CREDENTIAL_LEASE_BINDING_MISMATCH", upstreamStatus: 403 }],
     ["UPSTREAM_UNAVAILABLE", "private-status", { safeError: "UPSTREAM_UNAVAILABLE" }],
     ["private-secret-code", 403, { safeError: "BRAINBASE_UPSTREAM_UNAVAILABLE" }],
   ])("sanitizes boundary error %s", async (code, status, expected) => {
