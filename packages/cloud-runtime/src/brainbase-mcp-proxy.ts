@@ -1,3 +1,5 @@
+import { TenantBoundaryError } from "./multitenancy/errors.js";
+
 export const BRAINBASE_MCP_PROXY_HOST = "brainbase-mcp.internal";
 export const BRAINBASE_MCP_PROXY_PATH = "/mcp";
 export const BRAINBASE_JUDGMENT_HOOK_PROXY_PATH = "/host/judgment/hook";
@@ -42,6 +44,72 @@ async function mcpMethod(request: Request): Promise<string | undefined> {
     const body = await request.clone().json() as { method?: unknown };
     return typeof body.method === "string" ? body.method : undefined;
   } catch { return undefined; }
+}
+
+const MCP_LIFECYCLE_METHODS = new Set(["initialize", "notifications/initialized", "tools/list"] as const);
+type McpLifecycleMethod = "initialize" | "notifications/initialized" | "tools/list";
+type McpLifecycleCategory =
+  | "request_received"
+  | "response"
+  | "upstream_http_error"
+  | "configuration_error"
+  | "transport_error"
+  | "catalog_error";
+
+function mcpLifecycleMethod(method: string | undefined): McpLifecycleMethod | undefined {
+  return method && MCP_LIFECYCLE_METHODS.has(method as McpLifecycleMethod)
+    ? method as McpLifecycleMethod
+    : undefined;
+}
+
+const SAFE_BOUNDARY_CODES = new Set([
+  "SCHEMA_INVALID", "SERVICE_AUTH_REQUIRED", "CREDENTIAL_LEASE_SCOPE_MISMATCH",
+  "CREDENTIAL_LEASE_ALREADY_USED", "CREDENTIAL_LEASE_EXPIRED", "CREDENTIAL_LEASE_INVALID",
+  "CREDENTIAL_LEASE_BINDING_MISMATCH",
+  "CREDENTIAL_FORWARDING_UNAVAILABLE", "PROVIDER_OPERATION_UNSUPPORTED",
+  "UPSTREAM_INVALID_RESPONSE", "UPSTREAM_UNAVAILABLE", "TENANT_CONTEXT_INVALID",
+  "AUTHORITY_CONTEXT_EXPIRED", "COMPANY_AUTHORITY_OPERATION_FORBIDDEN",
+  "WORKSPACE_CONNECTION_REVISION_MISMATCH", "CONFIGURATION_INVALID",
+]);
+
+function safeTransportFailure(error: unknown): { safeError: string; upstreamStatus?: number } {
+  if (!(error instanceof TenantBoundaryError) || !SAFE_BOUNDARY_CODES.has(error.code)) {
+    return { safeError: "BRAINBASE_UPSTREAM_UNAVAILABLE" };
+  }
+  const status = error.details?.status;
+  return {
+    safeError: error.code,
+    ...(typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+      ? { upstreamStatus: status } : {}),
+  };
+}
+
+function safeUpstreamError(status: number): string | undefined {
+  return status >= 400 ? "BRAINBASE_UPSTREAM_HTTP_ERROR" : undefined;
+}
+
+function lifecycleCategory(status: number): "response" | "upstream_http_error" {
+  return status >= 400 ? "upstream_http_error" : "response";
+}
+
+function logMcpLifecycle(
+  method: McpLifecycleMethod | undefined,
+  details: {
+    status?: number;
+    safeError?: string;
+    upstreamStatus?: number;
+    category: McpLifecycleCategory;
+  },
+): void {
+  if (!method) return;
+  console.log(JSON.stringify({
+    event: "brainbase_mcp_lifecycle",
+    method,
+    ...(details.status === undefined ? {} : { status: details.status }),
+    ...(details.safeError === undefined ? {} : { safeError: details.safeError }),
+    ...(details.upstreamStatus === undefined ? {} : { upstreamStatus: details.upstreamStatus }),
+    category: details.category,
+  }));
 }
 
 function filterToolCatalogPayload(payload: unknown, allowedTools: readonly string[]): unknown {
@@ -100,6 +168,9 @@ export async function handleBrainbaseMcpProxyRequest(
   policy?: BrainbaseMcpProxyPolicy,
 ): Promise<Response> {
   const url = new URL(request.url);
+  const method = await mcpMethod(request);
+  const lifecycleMethod = mcpLifecycleMethod(method);
+  logMcpLifecycle(lifecycleMethod, { category: "request_received" });
   const toolName = await mcpToolName(request);
   const diagnosticTool = ["brainbase_resolve_turn", "brainbase_judgment_state_record", "brainbase_knowledge_resolve"].includes(toolName ?? "")
     ? toolName : "other";
@@ -144,9 +215,13 @@ export async function handleBrainbaseMcpProxyRequest(
       }, { status: 403 });
     }
   }
-  const method = await mcpMethod(request);
   if (!env.BRAINBASE_MCP_BASE_URL || (!env.BRAINBASE_MCP_TOKEN && !fetchImpl)) {
     logPhase("config", 503);
+    logMcpLifecycle(lifecycleMethod, {
+      status: 503,
+      safeError: "BRAINBASE_PROXY_NOT_CONFIGURED",
+      category: "configuration_error",
+    });
     return Response.json({ error: { code: "BRAINBASE_PROXY_NOT_CONFIGURED", retryable: true } }, { status: 503 });
   }
   const headers = new Headers();
@@ -182,11 +257,23 @@ export async function handleBrainbaseMcpProxyRequest(
       signal: AbortSignal.timeout(30_000),
     });
     if (response.status >= 300 && response.status < 400) {
+      logMcpLifecycle(lifecycleMethod, {
+        status: 502,
+        safeError: "BRAINBASE_UPSTREAM_REDIRECT_REJECTED",
+        category: "transport_error",
+      });
       return Response.json({ error: { code: "BRAINBASE_UPSTREAM_REDIRECT_REJECTED", retryable: false } }, { status: 502 });
     }
     if (policy && method === "tools/list" && response.ok) {
-      return filterToolCatalogResponse(response, policy.allowedTools);
+      const filtered = await filterToolCatalogResponse(response, policy.allowedTools);
+      logMcpLifecycle(lifecycleMethod, filtered.status >= 400
+        ? { status: filtered.status, safeError: "BRAINBASE_MCP_TOOL_CATALOG_INVALID", category: "catalog_error" }
+        : { status: filtered.status, category: "response" });
+      return filtered;
     }
+    logMcpLifecycle(lifecycleMethod, response.status >= 400
+      ? { status: response.status, safeError: safeUpstreamError(response.status), category: lifecycleCategory(response.status) }
+      : { status: response.status, category: lifecycleCategory(response.status) });
     if (toolName) {
       const diagnostic = await response.clone().text();
       console.log(JSON.stringify({
@@ -198,8 +285,13 @@ export async function handleBrainbaseMcpProxyRequest(
       }));
     }
     return new Response(response.body, { status: response.status, headers: allowedMcpResponseHeaders(response) });
-  } catch {
+  } catch (error) {
     logPhase("upstream_fetch", 502);
+    logMcpLifecycle(lifecycleMethod, {
+      status: 502,
+      ...safeTransportFailure(error),
+      category: "transport_error",
+    });
     return Response.json({ error: { code: "BRAINBASE_UPSTREAM_UNAVAILABLE", retryable: true } }, { status: 502 });
   }
 }

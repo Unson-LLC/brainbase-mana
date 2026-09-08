@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { TenantBoundaryError } from "../multitenancy/errors.js";
 import { handleBrainbaseMcpProxyRequest } from "../brainbase-mcp-proxy.js";
 
 describe("Brainbase judgment Hook proxy", () => {
@@ -284,6 +285,161 @@ describe("MCP failure boundary diagnostics", () => {
       ]);
       expect(JSON.stringify(entries)).not.toMatch(/secret|private user content/);
       expect(forward).toHaveBeenCalledTimes(phase === "upstream_fetch" ? 1 : 0);
+    } finally { log.mockRestore(); }
+  });
+});
+
+describe("MCP lifecycle diagnostics", () => {
+  it("records initialize, initialized notification, and tools/list with safe fields only", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const initializeBody = `event: message\ndata: ${JSON.stringify({
+      jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-03-26", private: "request-secret" },
+    })}\n\n`;
+    const catalogBody = `event: message\ndata: ${JSON.stringify({
+      jsonrpc: "2.0", id: 2, result: { tools: [
+        { name: "brainbase_resolve_turn" }, { name: "private_tool_secret" },
+      ] },
+    })}\n\n`;
+    const responses = [
+      new Response(initializeBody, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      new Response(null, { status: 202 }),
+      new Response(catalogBody, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    ];
+    const forward = vi.fn(async () => responses.shift()!);
+    try {
+      const env = { BRAINBASE_MCP_BASE_URL: "https://bb.example.test" };
+      const policy = { allowedTools: ["brainbase_resolve_turn"] };
+      const initialize = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/mcp", { method: "POST", body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "initialize", params: {},
+        }) }), env, forward as typeof fetch, policy,
+      );
+      expect(initialize.status).toBe(200);
+      expect(initialize.headers.get("content-type")).toContain("text/event-stream");
+      expect(await initialize.text()).toContain("request-secret");
+
+      const initialized = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/mcp", { method: "POST", body: JSON.stringify({
+          jsonrpc: "2.0", method: "notifications/initialized", params: {},
+        }) }), env, forward as typeof fetch, policy,
+      );
+      expect(initialized.status).toBe(202);
+      expect(await initialized.text()).toBe("");
+
+      const tools = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/mcp", { method: "POST", body: JSON.stringify({
+          jsonrpc: "2.0", id: 2, method: "tools/list", params: {},
+        }) }), env, forward as typeof fetch, policy,
+      );
+      expect(tools.status).toBe(200);
+      expect(tools.headers.get("content-type")).toContain("text/event-stream");
+      expect(await tools.text()).toContain('"tools":[{"name":"brainbase_resolve_turn"}]');
+
+      const entries = log.mock.calls.map(([line]) => JSON.parse(String(line)));
+      expect(entries).toEqual([
+        { event: "brainbase_mcp_lifecycle", method: "initialize", category: "request_received" },
+        { event: "brainbase_mcp_lifecycle", method: "initialize", status: 200, category: "response" },
+        { event: "brainbase_mcp_lifecycle", method: "notifications/initialized", category: "request_received" },
+        { event: "brainbase_mcp_lifecycle", method: "notifications/initialized", status: 202, category: "response" },
+        { event: "brainbase_mcp_lifecycle", method: "tools/list", category: "request_received" },
+        { event: "brainbase_mcp_lifecycle", method: "tools/list", status: 200, category: "response" },
+      ]);
+      expect(JSON.stringify(entries)).not.toMatch(/request-secret|private_tool_secret/);
+      expect(forward).toHaveBeenCalledTimes(3);
+    } finally { log.mockRestore(); }
+  });
+
+  it("records an empty 204 notification response without changing it", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/mcp", { method: "POST", body: JSON.stringify({
+          jsonrpc: "2.0", method: "notifications/initialized",
+        }) }),
+        { BRAINBASE_MCP_BASE_URL: "https://bb.example.test" },
+        vi.fn(async () => new Response(null, { status: 204 })) as typeof fetch,
+        { allowedTools: [] },
+      );
+      expect(response.status).toBe(204);
+      expect(await response.text()).toBe("");
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+        { event: "brainbase_mcp_lifecycle", method: "notifications/initialized", category: "request_received" },
+        { event: "brainbase_mcp_lifecycle", method: "notifications/initialized", status: 204, category: "response" },
+      ]);
+    } finally { log.mockRestore(); }
+  });
+
+  it("records upstream HTTP failures without exposing the response body", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/mcp", { method: "POST", body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "initialize", params: {},
+        }) }),
+        { BRAINBASE_MCP_BASE_URL: "https://bb.example.test" },
+        vi.fn(async () => Response.json({
+          jsonrpc: "2.0", id: 1, error: { code: -32000, message: "Not Acceptable private response" },
+        }, { status: 406 })) as typeof fetch,
+        { allowedTools: [] },
+      );
+      expect(response.status).toBe(406);
+      const entries = log.mock.calls.map(([line]) => JSON.parse(String(line)));
+      expect(entries).toEqual([
+        { event: "brainbase_mcp_lifecycle", method: "initialize", category: "request_received" },
+        { event: "brainbase_mcp_lifecycle", method: "initialize", status: 406,
+          safeError: "BRAINBASE_UPSTREAM_HTTP_ERROR", category: "upstream_http_error" },
+      ]);
+      expect(JSON.stringify(entries)).not.toMatch(/Not Acceptable|private response/);
+    } finally { log.mockRestore(); }
+  });
+
+  it("records transport failures with a fixed error", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/mcp", { method: "POST", body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "tools/list", params: {},
+        }) }),
+        { BRAINBASE_MCP_BASE_URL: "https://bb.example.test" },
+        vi.fn(async () => { throw new Error("credential=private transport detail"); }) as typeof fetch,
+        { allowedTools: [] },
+      );
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+        { event: "brainbase_mcp_lifecycle", method: "tools/list", category: "request_received" },
+        { event: "brainbase_mcp_lifecycle", method: "tools/list", status: 502,
+          safeError: "BRAINBASE_UPSTREAM_UNAVAILABLE", category: "transport_error" },
+      ]);
+      expect(JSON.stringify(log.mock.calls)).not.toMatch(/credential|private transport detail/);
+    } finally { log.mockRestore(); }
+  });
+});
+
+
+describe("MCP transport error sanitization", () => {
+  it.each([
+    ["CREDENTIAL_LEASE_SCOPE_MISMATCH", 403, { safeError: "CREDENTIAL_LEASE_SCOPE_MISMATCH", upstreamStatus: 403 }],
+    ["CREDENTIAL_LEASE_BINDING_MISMATCH", 403, { safeError: "CREDENTIAL_LEASE_BINDING_MISMATCH", upstreamStatus: 403 }],
+    ["UPSTREAM_UNAVAILABLE", "private-status", { safeError: "UPSTREAM_UNAVAILABLE" }],
+    ["private-secret-code", 403, { safeError: "BRAINBASE_UPSTREAM_UNAVAILABLE" }],
+  ])("sanitizes boundary error %s", async (code, status, expected) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/mcp", { method: "POST", body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "initialize",
+        }) }),
+        { BRAINBASE_MCP_BASE_URL: "https://bb.example.test" },
+        vi.fn(async () => { throw new TenantBoundaryError("private-boundary", String(code),
+          "private-message", { status, token: "private-token" }); }) as typeof fetch,
+        { allowedTools: [] },
+      );
+      expect(response.status).toBe(502);
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+        { event: "brainbase_mcp_lifecycle", method: "initialize", category: "request_received" },
+        { event: "brainbase_mcp_lifecycle", method: "initialize", status: 502,
+          ...expected, category: "transport_error" },
+      ]);
+      expect(JSON.stringify(log.mock.calls)).not.toContain("private-");
     } finally { log.mockRestore(); }
   });
 });
