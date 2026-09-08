@@ -813,6 +813,84 @@ describe("Slack reply Judgment lifecycle", () => {
     ]);
   });
 
+  it("authenticates lifecycle Stop receipts without counting them as source evidence", () => {
+    const lines = stream({ withTool: true }).split("\n");
+    const stopIndex = lines.findIndex((line) => line.includes('"hook_event":"Stop"'));
+    const lifecycleEvents = [
+      {
+        id: "resolve-turn",
+        name: "mcp__brainbase__brainbase_resolve_turn",
+        audit: zeroCallLine,
+        input: {},
+        result: "{}",
+      },
+      {
+        id: "state-record",
+        name: "mcp__brainbase__brainbase_judgment_state_record",
+        audit: zeroCallLine,
+        input: {},
+        result: "{}",
+      },
+      {
+        id: "audit-read",
+        name: "mcp__brainbase__brainbase_judgment_audit_read",
+        audit: "",
+        input: { turn_ref: `${"a".repeat(64)}/${"b".repeat(64)}` },
+        result: JSON.stringify({ status: "ok", data: { prefix: `${judgmentLine}\n${brainbaseLine}` } }),
+      },
+    ];
+    lines.splice(stopIndex, 0, ...lifecycleEvents.flatMap(({ id, name, audit, input, result }) => [
+      JSON.stringify({
+        type: "assistant", session_id: "session-1", message: { content: [{
+          type: "tool_use", id, name, input,
+        }] },
+      }),
+      JSON.stringify(hook("PostToolUse", audit, "turn-1", {
+        tool_use_id: id,
+        tool_name: name,
+      })),
+      JSON.stringify({
+        type: "user", session_id: "session-1", message: { content: [{
+          type: "tool_result", tool_use_id: id, content: result,
+        }] },
+      }),
+    ]));
+    const stopReceipts: Array<{
+      tool_use_id: string;
+      tool_name: string;
+      outcome: "success" | "error";
+    }> = [
+      ...lifecycleEvents.map(({ id, name }) => ({
+        tool_use_id: id,
+        tool_name: name,
+        outcome: "success" as const,
+      })),
+      {
+        tool_use_id: "tool-1",
+        tool_name: "mcp__brainbase__brainbase_knowledge_resolve",
+        outcome: "success",
+      },
+    ];
+    const withStopJournal = bindStopToolReceipts(lines.join("\n"), stopReceipts);
+
+    expect(parseReplyJudgmentStream(withStopJournal).toolJournal).toEqual([
+      {
+        sequence: 1,
+        toolUseId: "tool-1",
+        toolName: "mcp__brainbase__brainbase_knowledge_resolve",
+        outcome: "success",
+      },
+    ]);
+
+    const invalidLifecycleStopJournal = bindStopToolReceipts(lines.join("\n"), [
+      ...stopReceipts.slice(0, 2),
+      { ...stopReceipts[2]!, outcome: "error" },
+      stopReceipts[3]!,
+    ]);
+    expect(() => parseReplyJudgmentStream(invalidLifecycleStopJournal))
+      .toThrow("reply_judgment_tool_audit_mismatch_stop_tool_receipts_identity_mismatch");
+  });
+
   it("fails closed when the Stop tool journal does not match the executed result", () => {
     const withoutPostTool = stream({ withTool: true }).split("\n")
       .filter((line) => !line.includes('"hook_event":"PostToolUse"'))

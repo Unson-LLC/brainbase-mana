@@ -19,7 +19,7 @@
     {
       "id": "INV-001",
       "type": "invariant",
-      "statement": "routing receiptを取得完了とは扱わず、必要なBrainbase tool callとHost監査行を記録順・記録回数どおり保持する",
+      "statement": "routing receiptを取得完了とは扱わず、必要なBrainbase正本参照tool callとHost監査行を記録順・記録回数どおり保持する。Judgment lifecycleの制御tool receiptは全件をidentity・結果検証するが、正本参照のtool journalと件数には含めない",
       "origin": {
         "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-3" }, { "kind": "acceptance_criteria", "ac_id": "AC-4" }, { "kind": "acceptance_criteria", "ac_id": "AC-6" }],
         "architecture_refs": [{ "file": "docs/architecture/story-slack-mention-brainbase-judgment.md", "section": "信頼境界" }],

@@ -33,7 +33,7 @@ Slackでまなへメンションする利用者として、どの配置先・チ
 - [ ] AC3: active DAGがBrainbase知識参照を要求した場合は、`brainbase_knowledge_resolve`を正本ルーティングとして実行し、そのreceiptが示す取得capabilityまで完了する。route receiptだけを検索・取得済みとは扱わず、必要なら同じepisodeで複数回参照する。
 - [ ] AC4: active nodeを指定順に完了し、clarification receiptの場合は指定された確認を利用者へ返す。必須node、取得、または監査が未完了のまま通常回答を生成・投稿しない。
 - [ ] AC5: Brainbaseのtimeout、非2xx、不正receipt、identity不一致、必須取得失敗、またはStop未完了時はfail closedとし、根拠のない通常回答をSlackへ投稿しない。再試行可能な失敗状態を保存する。
-- [ ] AC6: 最終回答にはHostが生成した判断監査行と、実際に発生したBrainbase tool callの監査行を記録順・記録回数どおり表示する。実呼び出しが0回の場合だけHost指定の未参照行を表示し、mana-runtime側で監査文言を生成・要約・補完しない。
+- [ ] AC6: 最終回答にはHostが生成した判断監査行と、実際に発生したBrainbaseの正本参照tool callの監査行を記録順・記録回数どおり表示する。Judgment lifecycleの制御tool receiptは同一turnの識別・結果を全件検証するが、正本参照のtool journalと件数には含めない。実呼び出しが0回の場合だけHost指定の未参照行を表示し、mana-runtime側で監査文言を生成・要約・補完しない。
 - [ ] AC7: `Slack event_id`、workspace、channel、thread、Claude session、Brainbase turn、route resolution、tool journal、Stop結果、Slack `response_ts`を同じ永続的episode receiptで追跡できる。secretとSlack本文はreceiptへ保存しない。
 - [ ] AC8: 同一Slack eventの再配送・Queue retryでは完了済みepisodeと返信を重複作成しない。失敗episodeの再試行は履歴を保持した新しいattemptとして識別できる。
 - [ ] AC9: 既存の議事録Judgment lifecycle、Brainbase proxyの認証境界、通常回答のplacement認可、Slack thread返信、Queue retry契約を退行させない。
