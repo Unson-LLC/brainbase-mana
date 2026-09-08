@@ -301,6 +301,10 @@ describe("TechKnight Slack reply pipeline", () => {
         processId: expect.stringMatching(/^reply-[0-9a-f-]{36}$/),
         autoCleanup: false,
         timeout: 540_000,
+        env: expect.objectContaining({
+          MCP_CONNECTION_NONBLOCKING: "0",
+          MCP_CONNECT_TIMEOUT_MS: "30000",
+        }),
       }),
     );
     expect(getStatus).toHaveBeenCalledTimes(2);
@@ -966,6 +970,8 @@ describe("TechKnight Slack reply pipeline", () => {
           MANA_TRACE_PLACEMENT_ID: undefined,
           MANA_TRACE_PROJECT_CODES: undefined,
           MANA_JUDGMENT_REQUEST: "メンションしてみる",
+          MCP_CONNECTION_NONBLOCKING: "0",
+          MCP_CONNECT_TIMEOUT_MS: "30000",
         },
       },
     );
@@ -1191,6 +1197,7 @@ describe("TechKnight Slack reply pipeline", () => {
         brainbase: {
           command: "node",
           args: ["/opt/mana/brainbase-mcp-server.mjs"],
+          alwaysLoad: true,
           env: { MANA_TENANT_BOUNDARY_HANDLE: TENANT_BOUNDARY_A },
         },
         "task-search": {
@@ -1223,6 +1230,7 @@ describe("TechKnight Slack reply pipeline", () => {
     expect(JSON.parse(String(writes["/tmp/mana-task-search-mcp.json"]))).toEqual({
       mcpServers: {
         brainbase: { command: "node", args: ["/opt/mana/brainbase-mcp-server.mjs"],
+          alwaysLoad: true,
           env: { MANA_TENANT_BOUNDARY_HANDLE: TENANT_BOUNDARY_A } },
         "task-search": { command: "node", args: ["/opt/mana/task-search-mcp-server.mjs"],
           env: { MANA_TENANT_BOUNDARY_HANDLE: TENANT_BOUNDARY_A } },

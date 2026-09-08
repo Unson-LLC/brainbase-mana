@@ -9,7 +9,8 @@ mana-runtimeはClaudeの`stream-json`を検証し、同じsession・turnに属�
 ## データフロー
 
 1. Workerがplacement認可、依頼者identity、Graph文脈、thread文脈を従来どおり確定する。
-2. Workerがpromptとplacement由来のMCP configを書き、通常回答用Claude commandをJudgment settings、`stream-json`、`--include-hook-events`付きで起動する。
+2. Workerがpromptとplacement由来のMCP configを書き、Brainbase stdio serverだけに`alwaysLoad: true`を設定する。通常回答用Claude commandはJudgment settings、`stream-json`、`--include-hook-events`付きで起動し、返信Claudeプロセスへ`MCP_CONNECTION_NONBLOCKING=0`と`MCP_CONNECT_TIMEOUT_MS=30000`を渡す。この30秒はMCP初期化の待機上限であり、Sandbox全体の実行timeoutとは分離する。
+   2026-09-08のClaude 2.1.195・約8秒遅延試験では、`alwaysLoad`単独と待機環境変数単独では初回直接tool呼び出しまで到達せず、両設定の併用で`connected`と初回直接tool成功を確認した。
 3. `UserPromptSubmit` Hookがtrusted proxy経由でBrainbase Hostを呼び、Hostが初期route、active nodes、追加指示を同じturnへ束縛する。Hostが返すcanonical `hookSpecificOutput.additionalContext`、route receipt ID、route receipt SHA-256 digestをforwarderが検証し、digestを表示文から再生成せず同じturnへ引き継ぐ。
 4. ClaudeはHostの指示に従って必要なBrainbase MCP toolと、そのrouting receiptが返した取得capabilityを実行する。各Brainbase tool call後の`PostToolUse`を同じturnへ記録する。
 5. `Stop` Hookが必須node、取得、監査をBrainbase Hostで検証する。不足があればHook exit 2で停止または継続させ、未完了出力を通常回答として採用しない。

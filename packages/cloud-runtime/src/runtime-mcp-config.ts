@@ -1,6 +1,7 @@
 export interface RuntimeMcpStdioServerConfig {
   command: "node";
   args: [string];
+  alwaysLoad?: boolean;
   env?: Record<string, string>;
 }
 export interface RuntimeMcpHttpServerConfig {
@@ -43,6 +44,7 @@ export function buildRuntimeMcpConfig(capabilities: {
       mcpServers[name] = {
         command: "node",
         args: [SERVER_PATHS.brainbase],
+        alwaysLoad: true,
         env: { MANA_TENANT_BOUNDARY_HANDLE: tenantBoundaryHandle },
       };
       continue;

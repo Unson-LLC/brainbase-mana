@@ -598,6 +598,8 @@ export async function generateClaudeReply(
       MANA_TENANT_BOUNDARY_HANDLE: options.tenantBoundaryHandle,
       MANA_TRACE_PLACEMENT_ID: options.trace?.placementId,
       MANA_TRACE_PROJECT_CODES: options.trace?.projectCodes?.join(","),
+      MCP_CONNECTION_NONBLOCKING: "0",
+      MCP_CONNECT_TIMEOUT_MS: "30000",
       ...(options.taskSearchEnabled && requestsOwnTasks(event.text) && requesterIdentity ? {
         MANA_TASK_SEARCH_ASSIGNEE_PERSON_ID: requesterIdentity.personId,
       } : {}),

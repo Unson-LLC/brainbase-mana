@@ -19,6 +19,7 @@ describe("placement-scoped runtime MCP config", () => {
     expect(config.mcpServers.brainbase).toEqual({
       command: "node",
       args: ["/opt/mana/brainbase-mcp-server.mjs"],
+      alwaysLoad: true,
       env: { MANA_TENANT_BOUNDARY_HANDLE: "tb_opaque_operation_handle" },
     });
     expect(config.mcpServers["google-drive"]).toEqual({
@@ -42,6 +43,7 @@ describe("placement-scoped runtime MCP config", () => {
       brainbase: {
         command: "node",
         args: ["/opt/mana/brainbase-mcp-server.mjs"],
+        alwaysLoad: true,
         env: { MANA_TENANT_BOUNDARY_HANDLE: "tb_opaque_operation_handle" },
       },
     });
