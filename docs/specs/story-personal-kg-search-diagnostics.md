@@ -1,0 +1,17 @@
+# 個人KG検索の診断契約
+
+対象Story: story-personal-kg-search-diagnostics
+
+reply-pipelineがprocess.getLogsを取得した直後に診断を投影する。再開で前のstreamが置換される前に、各実行を既存のSlack traceIdへ関連付ける。最終監査や返信内容の判定には利用しない。
+
+対象はmcp__gateway__search_personal_kgのみ。tool_use_idで結果を対応付け、Gatewayが返すuntrusted_dataとitemsの構造を検証する。結果event IDはitems内の個人KG event_idであり、streamのUUIDやtool_use_idではない。
+
+運用ログmana_personal_kg_transcript_diagnosticのpersonalKnowledgeJsonに固定項目をJSON文字列として格納する（ログ基盤によるネスト省略を防ぐ）。入力と結果本文はハッシュだけを出力する。入力サイズ、行サイズ、call件数、結果件数を制限し、欠落や衝突は不明として扱う。例外のメッセージは保存せず、診断処理全体をbest effortで実行する。
+
+単体テストで成功、失敗、結果欠落、無関係tool、複数call、再開境界、重複衝突、サイズ上限、秘密文字列の非出力を確認する。本番ではランダムfixtureの既存SHA-256規約に合わせて照合し、実際の返信読戻しとHost監査を別々に記録する。
+
+同一Slack traceIdの再開はdiagnosticRunId（内部生成session UUIDと実行連番）で区別する。同じdiagnosticRunIdの配信重複は1件として扱い、異なるrunを合算して検索0件や連続DM2回の成功にしない。連続2回は異なるSlack event IDごとに、少なくとも1つの現在実行の確定検索結果と返信・Host監査を照合する。
+
+検索語はtrim後のUTF-8、本文は空白・改行を変更しないUTF-8をSHA-256へ変換する。本文なしの結果ではbody_hashが妥当な場合だけ利用し、それ以外はnullを同じ配列位置に残す。ログ可能なevent_idはpke_と24桁の小文字16進数からなる診断用の安全な部分集合に限定する。これはAPI全体のID制約ではなく、その他のIDは不明とする。
+
+stream全体512KiB、1行128KiB、event 4096件、検索call 8件、1結果50項目、検索語4000文字、本文64KiB、診断JSON全体64KiBを上限とする。structured error、success:false、不正型または矛盾するerror flagを成功として記録しない。

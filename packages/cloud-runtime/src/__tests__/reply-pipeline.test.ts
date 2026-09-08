@@ -353,6 +353,33 @@ describe("TechKnight Slack reply pipeline", () => {
     expect(sandbox.exec).not.toHaveBeenCalled();
   });
 
+  it("preserves an audited reply when personal KG diagnostic logging fails", async () => {
+    const { options, sandbox } = harness({ tenantBoundaryHandle: TENANT_BOUNDARY_A });
+    const startProcess = vi.fn().mockResolvedValue({
+      getStatus: vi.fn().mockResolvedValue("completed"),
+      getLogs: vi.fn().mockResolvedValue({ stdout: auditedReplyStream(), stderr: "" }),
+      kill: vi.fn().mockResolvedValue(undefined),
+    });
+    vi.mocked(options.createSandbox).mockReturnValue({ ...sandbox, startProcess });
+    const logging = vi.spyOn(console, "log").mockImplementation((entry) => {
+      if (entry?.event === "mana_personal_kg_transcript_diagnostic") {
+        throw new Error("diagnostic sink unavailable");
+      }
+    });
+    try {
+      await expect(generateClaudeReply(event(), options)).resolves.toMatchObject({
+        reply: expect.stringContaining("はい、Cloudflare上の八雲まなです。"),
+      });
+      expect(logging).toHaveBeenCalledWith(expect.objectContaining({
+        event: "mana_personal_kg_transcript_diagnostic",
+        traceId: "EvReply123",
+        personalKnowledgeJson: expect.any(String),
+      }));
+    } finally {
+      logging.mockRestore();
+    }
+  });
+
   it("keeps the original managed-process timeout when best-effort log capture fails", async () => {
     let nowCalls = 0;
     const { options, sandbox } = harness({

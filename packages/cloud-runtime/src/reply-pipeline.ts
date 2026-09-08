@@ -3,6 +3,7 @@ import {
   replyToolFailureDiagnostics,
 } from "./reply-tool-failure-diagnostics.js";
 import type { SlackQueueEvent } from "./types.js";
+import { projectPersonalKnowledgeDiagnostics } from "./reply-personal-kg-diagnostics.js";
 import {
   isReplyCompleted,
   persistReplyCompletion,
@@ -638,7 +639,9 @@ export async function generateClaudeReply(
       } : {}),
     };
     const claudeSessionId = crypto.randomUUID();
+    let diagnosticAttemptIndex = 0;
     const runClaude = async (resumeSession: boolean) => {
+      const diagnosticRunId = `${claudeSessionId}:${++diagnosticAttemptIndex}`;
       const command = buildRuntimeClaudeCommand("reply", options.claudeRuntime, {
         taskSearchEnabled: options.taskSearchEnabled,
         taskWriteEnabled: options.taskWriteEnabled,
@@ -692,6 +695,16 @@ export async function generateClaudeReply(
         status = await process.getStatus();
       }
       const logs = await process.getLogs();
+      // Observe each execution before a possible resume replaces its stream.
+      // Diagnostics must never change delivery or the judgment contract.
+      try {
+        emitTurnLog("log", "mana_personal_kg_transcript_diagnostic", event, trace, {
+          diagnosticRunId,
+          personalKnowledgeJson: JSON.stringify(await projectPersonalKnowledgeDiagnostics(logs.stdout)),
+        });
+      } catch {
+        // No arbitrary exception text: it could contain private tool output.
+      }
       return {
         success: status === "completed",
         stdout: logs.stdout,
