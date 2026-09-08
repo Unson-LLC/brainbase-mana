@@ -58,6 +58,17 @@ export function destinationSelectedMessage(runId: string, fileName: string,
   ] };
 }
 
+/** Durable follow-up for the original selector once the processing reply exists. */
+export function destinationSelectionCompletedMessage(fileName: string,
+  destination: MeetingMinutesDestination): Pick<SlackSelectionMessage, "text" | "blocks"> {
+  const safeFileName = escapeUntrustedSlackMrkdwn(fileName);
+  return {
+    text: `${safeFileName} の保存先に ${destination.name} が選択されました。最新の状況は、このスレッドの下の案内を確認してください。`,
+    blocks: [{ type: "section", text: { type: "mrkdwn",
+      text: `*✅ 保存先が選択されました*\n保存先: ${destination.name}\n最新の状況は、このスレッドの下の案内を確認してください。` } }],
+  };
+}
+
 /** Short-lived acknowledgement shown while a routing action waits on its next step. */
 export function interactionPendingMessage(fileName: string, status: string): SlackSelectionMessage {
   const safeFileName = escapeUntrustedSlackMrkdwn(fileName);
@@ -437,11 +448,29 @@ export class MeetingMinutesSlackClient {
   async postProcessingStatus(run: MeetingMinutesRun): Promise<string> {
     if (!run.destination) throw new Error("meeting_minutes_destination_missing");
     if (!run.slack?.selectionTs) throw new Error("meeting_minutes_selection_coordinates_missing");
+    const selectionTs = run.slack.selectionTs;
     await this.setThreadStatus(run, `議事録を作成しています…（${run.destination.name}）`);
     const result = await this.post("chat.postMessage", { channel: run.sourceChannelId, thread_ts: run.sourceThreadTs,
       text: `${escapeUntrustedSlackMrkdwn(run.file.name)} の議事録を作成しています。`, client_msg_id: await clientMessageId(`${run.runId}-processing`),
       blocks: [{ type: "section", text: { type: "mrkdwn", text: `*⏳ 議事録を作成中…*\n保存先: ${run.destination.name}\n完了すると共有先へ投稿します。` } }] });
     if (!result.ts) throw new Error("slack_response_ts_missing");
+    // Keep the processing reply as the durable status card. The original
+    // selector must still leave the pending state behind, however, so update
+    // it only after the processing reply is known to exist. A defensive
+    // same-ts guard prevents a future Slack response from overwriting the
+    // processing card (and its terminal action buttons).
+    if (selectionTs !== result.ts) {
+      const message = destinationSelectionCompletedMessage(run.file.name, run.destination);
+      try {
+        await this.post("chat.update", { channel: run.sourceChannelId, ts: selectionTs,
+          text: message.text, blocks: message.blocks });
+      } catch (error) {
+        console.error(JSON.stringify({ event: "meeting_minutes_selection_terminal_projection_failed",
+          runId: run.runId, stage: "status_projection", code: "STATUS_PROJECTION_FAILED",
+          correlation_id: deriveCorrelationId(run.runId, "status_projection", "STATUS_PROJECTION_FAILED"), retryable: true,
+          ...(error instanceof Error ? { error_name: error.name.slice(0, 64) } : {}) }));
+      }
+    }
     return result.ts;
   }
   async showProcessingStatus(channelId: string, threadTs: string, destinationName: string): Promise<void> {

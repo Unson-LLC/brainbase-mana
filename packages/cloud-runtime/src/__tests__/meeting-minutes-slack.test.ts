@@ -447,14 +447,55 @@ describe("MeetingMinutesSlackClient", () => {
   });
 
   it("posts processing as a second reply after the selector reply", async () => {
-    const bodies: Array<Record<string, unknown>> = [];
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      bodies.push(JSON.parse(String(init?.body))); return Response.json({ ok: true, ts: "3.1" });
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+      return Response.json({ ok: true, ts: "3.1" });
     }) as typeof fetch;
     await expect(new MeetingMinutesSlackClient("token", fetchImpl).postProcessingStatus(routedRun()))
       .resolves.toBe("3.1");
-    expect(bodies[1]).toMatchObject({ channel: "C1", thread_ts: "1.0" });
-    expect(JSON.stringify(bodies[1])).toContain("議事録を作成中");
+    expect(calls[1]).toMatchObject({ url: "https://slack.com/api/chat.postMessage",
+      body: { channel: "C1", thread_ts: "1.0" } });
+    expect(JSON.stringify(calls[1]?.body)).toContain("議事録を作成中");
+    expect(calls[2]).toMatchObject({ url: "https://slack.com/api/chat.update",
+      body: { channel: "C1", ts: "2.1" } });
+    expect(JSON.stringify(calls[2]?.body)).toContain("最新の状況は、このスレッドの下の案内を確認してください");
+    expect(JSON.stringify(calls[2]?.body)).not.toContain("actions");
+  });
+
+  it("does not overwrite the processing card when Slack returns the selector timestamp", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return Response.json({ ok: true, ts: "2.1" });
+    }) as typeof fetch;
+    await expect(new MeetingMinutesSlackClient("token", fetchImpl).postProcessingStatus(routedRun()))
+      .resolves.toBe("2.1");
+    expect(calls).toEqual([
+      "https://slack.com/api/assistant.threads.setStatus",
+      "https://slack.com/api/chat.postMessage",
+    ]);
+  });
+
+  it("keeps processing going when the old selector cannot be terminalized", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      return url.endsWith("/chat.update")
+        ? Response.json({ ok: false, error: "message_not_found" })
+        : Response.json({ ok: true, ts: "3.1" });
+    }) as typeof fetch;
+    try {
+      await expect(new MeetingMinutesSlackClient("token", fetchImpl).postProcessingStatus(routedRun()))
+        .resolves.toBe("3.1");
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("meeting_minutes_selection_terminal_projection_failed"));
+    } finally {
+      error.mockRestore();
+    }
+    expect(calls[1]).toBe("https://slack.com/api/chat.postMessage");
+    expect(calls[2]).toBe("https://slack.com/api/chat.update");
   });
 
   it("marks the old destination post as withdrawn and reopens the selector in the status reply", async () => {
