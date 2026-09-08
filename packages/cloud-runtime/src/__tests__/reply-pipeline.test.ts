@@ -2037,11 +2037,15 @@ describe("TechKnight Slack reply pipeline", () => {
     warnSpy.mockRestore();
   });
 
-  it("preserves safe intake boundary diagnostics without leaking exception data", async () => {
+  it.each([
+    ["slack_delivery", "AUTHORITY_SCOPE_MISMATCH"],
+    ["workspace_connection", "WORKSPACE_CONNECTION_UNAVAILABLE"],
+    ["workspace_connection", "WORKSPACE_CONNECTION_STALE_REVISION"],
+  ])("preserves safe intake boundary diagnostics without leaking exception data (%s/%s)", async (boundary, code) => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const fetchMock = vi.fn().mockRejectedValue(new TenantBoundaryError(
-        "slack_delivery", "AUTHORITY_SCOPE_MISMATCH", "secret-canary-message",
+        boundary, code, "secret-canary-message",
         { status: 403, token: "secret-canary-token" },
       ));
       await expect(withSlackThreadStatus(event(), { fetch: fetchMock }, async () => "replied"))
@@ -2049,7 +2053,7 @@ describe("TechKnight Slack reply pipeline", () => {
       const rows = warnSpy.mock.calls.map(([value]) => JSON.parse(String(value)));
       expect(rows).toHaveLength(2);
       for (const row of rows) expect(row).toMatchObject({
-        code: "AUTHORITY_SCOPE_MISMATCH", boundary: "slack_delivery", http_status: 403,
+        code, boundary, http_status: 403,
         event_id: event().eventId, thread_ts: event().threadTs,
       });
       expect(JSON.stringify(rows)).not.toContain("secret-canary");
