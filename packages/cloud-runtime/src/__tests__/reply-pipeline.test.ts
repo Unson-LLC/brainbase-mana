@@ -267,6 +267,47 @@ describe("TechKnight Slack reply pipeline", () => {
     });
   });
 
+  it("captures Slack's canonical posted message while preserving the timestamp return contract", async () => {
+    const responseTs = "1786455000.000001";
+    const canonicalText = ":brain: 正規化された本文";
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      channel: event().channelId,
+      ts: responseTs,
+      message: {
+        type: "message",
+        ts: responseTs,
+        text: canonicalText,
+      },
+    }), { status: 200 }));
+    const onPosted = vi.fn();
+    const { options } = harness({ fetch: fetchMock });
+
+    await expect(postSlackReply(event(), "🧠 正規化された本文", { ...options, onPosted }))
+      .resolves.toBe(responseTs);
+    expect(onPosted).toHaveBeenCalledOnce();
+    expect(onPosted).toHaveBeenCalledWith({
+      responseTs,
+      responseChannel: event().channelId,
+      messageTs: responseTs,
+      messageText: canonicalText,
+    });
+  });
+
+  it("reports a partial post response without fabricating canonical message fields", async () => {
+    const responseTs = "1786455000.000001";
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      ts: responseTs,
+    }), { status: 200 }));
+    const onPosted = vi.fn();
+    const { options } = harness({ fetch: fetchMock });
+
+    await expect(postSlackReply(event(), "返信本文", { ...options, onPosted }))
+      .resolves.toBe(responseTs);
+    expect(onPosted).toHaveBeenCalledWith({ responseTs });
+  });
+
   it("uses a fresh Container for a retry of the same tenant operation", async () => {
     const { options } = harness({ tenantBoundaryHandle: TENANT_BOUNDARY_A });
 

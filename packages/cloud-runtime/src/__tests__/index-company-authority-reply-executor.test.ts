@@ -27,6 +27,9 @@ const runtimeMocks = vi.hoisted(() => ({
   hydrateGraphContext: vi.fn(),
   getSandbox: vi.fn(),
   mutateReplyEvent: false,
+  replyText: "返信本文",
+  postResponseText: undefined as string | undefined,
+  postResponseMode: "complete" as "complete" | "missing_message" | "mismatched_message_ts" | "mismatched_response_channel",
   preparedRequesters: [] as Array<Record<string, unknown>>,
   workspaceStub: {
     claimRuntimeEvent: vi.fn(),
@@ -446,7 +449,22 @@ async function brokerFetch(input: RequestInfo | URL, init?: RequestInit): Promis
     return Response.json({ ok: true, team_id: workspaceId, bot_id: "B_UNSON" });
   }
   if (path.endsWith("/chat.postMessage")) {
-    return Response.json({ ok: true, ts: responseTs });
+    if (runtimeMocks.postResponseMode === "missing_message") {
+      return Response.json({ ok: true, channel: channelId, ts: responseTs });
+    }
+    return Response.json({
+      ok: true,
+      channel: runtimeMocks.postResponseMode === "mismatched_response_channel"
+        ? "C_OTHER_CHANNEL" : channelId,
+      ts: responseTs,
+      message: {
+        type: "message",
+        ts: runtimeMocks.postResponseMode === "mismatched_message_ts"
+          ? "1786420000.000452"
+          : responseTs,
+        text: runtimeMocks.postResponseText ?? (typeof body.text === "string" ? body.text : ""),
+      },
+    });
   }
   return Response.json({ ok: false, error: "unexpected_test_request" }, { status: 500 });
 }
@@ -462,6 +480,9 @@ describe("Company Authority runtime.execute reply executor", () => {
     runtimeMocks.slackRequests.length = 0;
     runtimeMocks.readbackInputs.length = 0;
     runtimeMocks.mutateReplyEvent = false;
+    runtimeMocks.replyText = "返信本文";
+    runtimeMocks.postResponseText = undefined;
+    runtimeMocks.postResponseMode = "complete";
     runtimeMocks.hydrateGraphContext.mockResolvedValue({ status: "empty", content: "" });
     runtimeMocks.preparedRequesters.length = 0;
     runtimeMocks.workspaceHandle = { fs: runtimeMocks.workspaceFs };
@@ -539,7 +560,7 @@ describe("Company Authority runtime.execute reply executor", () => {
       const replyEvent = runtimeMocks.mutateReplyEvent
         ? { ...originalEvent, channelId: "C_UNAUTHORIZED" }
         : originalEvent;
-      const ts = await options.postReply?.(replyEvent, "返信本文");
+      const ts = await options.postReply?.(replyEvent, runtimeMocks.replyText);
       return { outcome: "replied", responseTs: ts };
     });
     runtimeMocks.readback.mockImplementation(async (input: Record<string, unknown>) => {
@@ -638,6 +659,51 @@ describe("Company Authority runtime.execute reply executor", () => {
     expect(runtimeMocks.readbackInputs[0]?.observed).toEqual({ channel: channelId, ts: responseTs });
     expect(runtimeMocks.readbackInputs[0]?.bodyHash).toEqual(expect.stringMatching(/^sha256:[a-f0-9]{64}$/));
     expect(runtimeMocks.workspaceStub.completeRuntimeEvent).toHaveBeenCalledOnce();
+  });
+
+  it("uses Slack's canonical response text for the strict readback hash", async () => {
+    runtimeMocks.replyText = "🧠 ⚠️ 🛠️ 正規化前";
+    runtimeMocks.postResponseText = ":brain: :warning: :hammer: 正規化後";
+
+    await expect(executeCompanyAuthorityReplyOperation(runtimeEnv(), operation())).resolves.toMatchObject({
+      applied: true,
+      response_observed: true,
+    });
+
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(runtimeMocks.postResponseText),
+    );
+    const expectedHash = `sha256:${[...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    expect(runtimeMocks.readbackInputs[0]?.bodyHash).toBe(expectedHash);
+  });
+
+  it.each([
+    ["missing_message"],
+    ["mismatched_message_ts"],
+    ["mismatched_response_channel"],
+  ] as const)("keeps %s unknown and does not retry the observed send", async (mode) => {
+    runtimeMocks.postResponseMode = mode;
+    const candidate = operation();
+
+    await expect(executeCompanyAuthorityReplyOperation(runtimeEnv(), candidate)).rejects.toThrow(
+      "SLACK_READBACK_invalid_response",
+    );
+    expect(runtimeMocks.readbackInputs).toHaveLength(0);
+    expect(runtimeMocks.slackRequests.filter(({ request }) =>
+      request.url.endsWith("/chat.postMessage"))).toHaveLength(1);
+
+    runtimeMocks.workspaceStub.claimRuntimeEvent.mockResolvedValue({
+      disposition: "completed", responseTs,
+    });
+    await expect(executeCompanyAuthorityReplyOperation(runtimeEnv(), candidate)).resolves.toEqual({
+      applied: true,
+      response_observed: false,
+    });
+    expect(runtimeMocks.slackRequests.filter(({ request }) =>
+      request.url.endsWith("/chat.postMessage"))).toHaveLength(1);
+    expect(runtimeMocks.executeReplyRuntime).toHaveBeenCalledOnce();
   });
 
   it("preserves only the owner-scoped personal KG gateway for an accepted canonical person", async () => {

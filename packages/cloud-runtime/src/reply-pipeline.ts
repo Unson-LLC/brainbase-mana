@@ -228,6 +228,18 @@ export interface ReplyPipelineOptions {
   postReply?(event: SlackQueueEvent, text: string, effectId?: string): Promise<string>;
 }
 
+/**
+ * The provider's parsed message is the source of truth for a later readback.
+ * Keep this observation deliberately small: it is only an internal handoff
+ * from the POST boundary to the caller that owns the readback.
+ */
+export interface SlackPostResponseObservation {
+  readonly responseTs: string;
+  readonly responseChannel?: string;
+  readonly messageTs?: string;
+  readonly messageText?: string;
+}
+
 export interface ReplyProcessSuccessResult {
   outcome: "ignored" | "already_completed" | "reacted" | "replied";
   responseTs?: string;
@@ -839,6 +851,8 @@ export async function postSlackReply(
      * external-effect route. Ordinary T0 replies omit this field.
      */
     provider_key?: string;
+    /** Capture the provider's canonical parsed message without changing the Promise<string> API. */
+    onPosted?: (observation: SlackPostResponseObservation) => void;
   },
 ): Promise<string> {
   if (!options.slackBotToken && !options.fetch) throw new ReplyPipelineError("slack_bot_token_not_configured");
@@ -897,7 +911,24 @@ export async function postSlackReply(
     });
     throw new ReplyPipelineError("slack_post_failed");
   }
-  return (payload as { ts: string }).ts;
+  const responsePayload = payload as {
+    ts: string;
+    channel?: unknown;
+    message?: unknown;
+  };
+  const message = responsePayload.message;
+  const messageRecord = message !== null && typeof message === "object" && !Array.isArray(message)
+    ? message as { ts?: unknown; text?: unknown }
+    : undefined;
+  options.onPosted?.({
+    responseTs: responsePayload.ts,
+    ...(typeof responsePayload.channel === "string"
+      ? { responseChannel: responsePayload.channel }
+      : {}),
+    ...(typeof messageRecord?.ts === "string" ? { messageTs: messageRecord.ts } : {}),
+    ...(typeof messageRecord?.text === "string" ? { messageText: messageRecord.text } : {}),
+  });
+  return responsePayload.ts;
 }
 
 function logSlackStatusFailure(code: string): void {
