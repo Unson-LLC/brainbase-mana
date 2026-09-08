@@ -311,26 +311,20 @@ export function createRuntimeGatewayProxyHandler(
           return responseError("gateway_not_configured", 503);
         }
         const headers = new Headers({ accept: "application/json" });
+        headers.set("content-type", "application/json");
         headers.set("x-brainbase-proxy-person-id", authority.ownerPersonId);
         headers.set("x-brainbase-organization-id", authority.organizationId);
         headers.set("x-brainbase-access-reason", `mana_personal_kg:${body.request_id}`);
         if (env.BRAINBASE_PERSONAL_KNOWLEDGE_API_TOKEN) headers.set("authorization", `Bearer ${env.BRAINBASE_PERSONAL_KNOWLEDGE_API_TOKEN}`);
-        const isSearch = tool === "search_personal_kg";
-        if (isSearch) {
-          endpoint.searchParams.set("query", String(input.payload.query));
-          endpoint.searchParams.set("limit", String(input.payload.limit));
-        } else {
-          headers.set("content-type", "application/json");
-        }
         let upstream: Response;
         try {
           upstream = await providerFetch(endpoint, {
-            method: isSearch ? "GET" : "POST",
+            method: "POST",
             headers,
-            ...(!isSearch ? { body: JSON.stringify({
+            body: JSON.stringify({
               ...input.payload,
               company_authority_response: authority.companyAuthorityResponse,
-            }) } : {}),
+            }),
           });
         } catch {
           return responseError("gateway_upstream_failed", 502);
