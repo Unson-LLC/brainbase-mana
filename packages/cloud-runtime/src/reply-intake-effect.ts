@@ -242,7 +242,9 @@ export function createReplyIntakeEffectFetch(options: ReplyIntakeEffectOptions):
         async (tenantFetch) => {
           const rebuilt = new Request(`${SLACK_ORIGIN}${effect.path}`, {
             method: "POST",
-            redirect: "error",
+            // Workers reject "error" during Request construction. Observe and
+            // reject redirects in assertProviderAccepted without following them.
+            redirect: "manual",
             headers: { "content-type": "application/json; charset=utf-8" },
             body: JSON.stringify(effect.body),
             signal: request.signal,

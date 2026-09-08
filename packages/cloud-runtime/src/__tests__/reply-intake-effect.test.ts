@@ -59,7 +59,7 @@ describe("bounded Slack reply intake effects", () => {
     for (const [input] of h.provider.mock.calls) {
       const req = input as Request;
       expect(req.headers.has("authorization")).toBe(false);
-      expect(req.redirect).toBe("error");
+      expect(req.redirect).toBe("manual");
       expect(new URL(req.url).origin).toBe("https://slack.com");
     }
     expect(h.resolveEffects).toHaveBeenCalledWith(expect.objectContaining({ requester_id: "U1", channel_id: "D1" }), h.current);
