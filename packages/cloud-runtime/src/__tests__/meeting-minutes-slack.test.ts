@@ -165,6 +165,36 @@ describe("MeetingMinutesSlackClient", () => {
     expect(authRequest?.body).toBeUndefined();
   });
 
+  it("reads back the completed status text when task integration is pending", async () => {
+    let updateText = "";
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("assistant.threads.setStatus")) return Response.json({ ok: true });
+      if (url.includes("chat.update")) {
+        updateText = String(JSON.parse(String(init?.body)).text);
+        return Response.json({ ok: true });
+      }
+      if (url.includes("auth.test")) return Response.json({ ok: true, team_id: "T1", bot_id: "B1" });
+      if (url.includes("conversations.replies")) return Response.json({ ok: true, messages: [{
+        type: "message", ts: "3.1", thread_ts: "1.0", app_id: "A1", bot_id: "B1", text: updateText,
+      }] });
+      throw new Error(`unexpected Slack request: ${url}`);
+    }) as typeof fetch;
+    const run = { ...routedRun(), taskRegistration: { registered: [], failure: {
+      index: 0, stage: "task_registration" as const, failurePoint: "task_create" as const,
+      code: "canonical_task_mutation_not_ready", status: 503, message: "task api unavailable",
+      failedAt: "2026-09-08T03:26:09.771Z",
+    } } } as MeetingMinutesRun;
+
+    await new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus(run, "completed", {
+      workspaceId: "T1", appId: "A1", expiresAt: Date.now() + 30_000,
+    });
+
+    expect(updateText).toContain("未完了のタスク連携を再実行できます");
+    expect(run.terminalSlackReadback).toMatchObject({ outcome: "completed", channel: "C1", ts: "3.1",
+      bodyHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) });
+  });
+
   it("logs the safe readback reason when the terminal source message does not match", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {

@@ -210,6 +210,34 @@ function healthyCompletedStatusText(run: MeetingMinutesRun): string {
     ? " Brainbaseの正本にない参照候補は除外しました。" : ""}`;
 }
 
+/** The exact source status text used for every completed outcome. */
+function completedStatusText(run: MeetingMinutesRun): string {
+  const safeFileName = escapeUntrustedSlackMrkdwn(run.file.name);
+  const permanentProjectBindingFailure = isBrainbaseProjectBindingFailure(run);
+  const permanentAuthenticationFailure = isBrainbaseAuthenticationFailure(run);
+  const persistedPlaceholderFailure = run.failure?.message === "meeting_minutes_persisted_placeholder_output";
+  const taskRegistrationPending = Boolean(run.taskRegistration?.failure)
+    && !permanentProjectBindingFailure && !permanentAuthenticationFailure;
+  const text = persistedPlaceholderFailure
+    ? `${safeFileName} の保存済み議事録に見本文が含まれています。保存先をやり直してください。`
+    : permanentAuthenticationFailure
+    ? `${safeFileName} の議事録は作成・共有済みですが、Brainbaseの認証設定を確認できませんでした。`
+    : permanentProjectBindingFailure
+    ? `${safeFileName} の議事録は作成・共有済みですが、Brainbaseのプロジェクト紐付けを確認できませんでした。`
+    : taskRegistrationPending
+    ? `${safeFileName} の議事録は作成・共有済みです。未完了のタスク連携を再実行できます。`
+    : healthyCompletedStatusText(run);
+  const diagnosticFailure = run.diagnostics?.failedAt ? run.diagnostics : undefined;
+  const hasLifecycleFailure = Boolean(run.failure || run.projectionFailure || diagnosticFailure || run.taskRegistration?.failure);
+  if (!hasLifecycleFailure) return text;
+  const lifecycleFailure = diagnosticFailure ?? run.projectionFailure;
+  const lifecycleStage = lifecycleFailure?.stage ?? run.taskRegistration?.failure?.stage ?? run.failure?.stage ?? "unknown";
+  const lifecycleCode = lifecycleFailure?.code
+    ?? (run.taskRegistration?.failure ? "TASK_REGISTRATION_FAILED" : "UNCLASSIFIED_FAILURE");
+  const lifecycleCorrelationId = deriveCorrelationId(run.runId, lifecycleStage, lifecycleCode);
+  return `${text}（問い合わせID: ${lifecycleCorrelationId}）`;
+}
+
 async function sha256(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return `sha256:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
@@ -452,16 +480,8 @@ export class MeetingMinutesSlackClient {
       ? "タスク登録は完了しましたが、タスクカードの投稿が完了していません。"
       : "タスク自動登録だけ完了していません。";
     const safeFileName = escapeUntrustedSlackMrkdwn(run.file.name);
-    const text = persistedPlaceholderFailure
-      ? `${safeFileName} の保存済み議事録に見本文が含まれています。保存先をやり直してください。`
-      : completed && permanentAuthenticationFailure
-      ? `${safeFileName} の議事録は作成・共有済みですが、Brainbaseの認証設定を確認できませんでした。`
-      : completed && permanentProjectBindingFailure
-      ? `${safeFileName} の議事録は作成・共有済みですが、Brainbaseのプロジェクト紐付けを確認できませんでした。`
-      : taskRegistrationPending
-      ? `${safeFileName} の議事録は作成・共有済みです。未完了のタスク連携を再実行できます。`
-      : completed
-      ? healthyCompletedStatusText(run)
+    const text = completed
+      ? completedStatusText(run)
       : permanentAuthenticationFailure
       ? `${safeFileName} の議事録作成に失敗しました。Brainbaseの認証設定を確認してください。`
       : permanentProjectBindingFailure
@@ -513,7 +533,7 @@ export class MeetingMinutesSlackClient {
     const lifecycleCode = lifecycleFailure?.code
       ?? (run.taskRegistration?.failure ? "TASK_REGISTRATION_FAILED" : "UNCLASSIFIED_FAILURE");
     const lifecycleCorrelationId = deriveCorrelationId(run.runId, lifecycleStage, lifecycleCode);
-    const userText = hasLifecycleFailure ? `${text}（問い合わせID: ${lifecycleCorrelationId}）` : text;
+    const userText = completed ? text : hasLifecycleFailure ? `${text}（問い合わせID: ${lifecycleCorrelationId}）` : text;
     const userDetails = completed && hasLifecycleFailure
       ? `${details}\n${safeFailureDetails(run).join("\n")}` : details;
     const blocks: Array<Record<string, unknown>> = [{ type: "section", text: { type: "mrkdwn", text: userDetails } }];
@@ -555,7 +575,7 @@ export class MeetingMinutesSlackClient {
     if (auth.team_id !== terminalReadback.workspaceId || !auth.bot_id) {
       throw new Error("meeting_minutes_terminal_slack_identity_mismatch");
     }
-    const bodyHash = await sha256(healthyCompletedStatusText(run));
+    const bodyHash = await sha256(completedStatusText(run));
     const readback = await readSlackDeliveryReadback({
       observed: { channel: run.sourceChannelId, ts: run.slack.processingTs },
       expected: { workspaceId: terminalReadback.workspaceId, appId: terminalReadback.appId, botId: auth.bot_id },
