@@ -60,7 +60,11 @@ const SLACK_REACTION_TIMEOUT_MS = 5_000;
 // granting every attempt a fresh lease. The nine-minute process ceiling leaves
 // one minute within the ten-minute requested-action capability window.
 const REPLY_SANDBOX_MAX_TIMEOUT_MS = 540_000;
-const REPLY_TIMEOUT_LOG_CAPTURE_TIMEOUT_MS = 2_000;
+const REPLY_TIMEOUT_DIAGNOSTICS_TIMEOUT_MS = 2_000;
+// Leave a bounded remainder for structured stdout capture after asking the
+// managed process to stop. A stop request may never settle when the Sandbox
+// control plane is already unhealthy, so diagnostics must not wait on it.
+const REPLY_TIMEOUT_KILL_TIMEOUT_MS = 1_000;
 const REPLY_TENANT_BOUNDARY_SAFETY_MARGIN_MS = 30_000;
 const REPLY_AUDIT_FAILURE_CODE = "reply_judgment_tool_audit_mismatch_posttool_receipt_binding_missing";
 const REPLY_FAILURE_NOTICE_TEXT = "処理結果の確認でエラーが起きました。依頼された操作が完了したかは、まだ確認できていません。";
@@ -87,31 +91,48 @@ type ReplyTimeoutKind = "sandbox_process_timeout";
 
 type ReplyProcessLogs = { stdout: string; stderr: string };
 
+type BoundedOperationResult<T> =
+  | { status: "completed"; value: T }
+  | { status: "failed" | "timed_out" };
+
 function processLogs(value: unknown): value is ReplyProcessLogs {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
   return typeof candidate.stdout === "string" && typeof candidate.stderr === "string";
 }
 
-async function getTimeoutProcessLogsBestEffort(
-  process: ReplyManagedProcess,
-): Promise<ReplyProcessLogs | undefined> {
+function runBoundedOperation<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number,
+): Promise<BoundedOperationResult<T>> {
   return new Promise((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (value: unknown) => {
+    const finish = (result: BoundedOperationResult<T>) => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
-      resolve(processLogs(value) ? value : undefined);
+      resolve(result);
     };
-    timer = setTimeout(() => finish(undefined), REPLY_TIMEOUT_LOG_CAPTURE_TIMEOUT_MS);
+
+    timer = setTimeout(() => finish({ status: "timed_out" }), Math.max(0, timeoutMs));
     try {
-      process.getLogs().then(finish, () => finish(undefined));
+      operation().then(
+        (value) => finish({ status: "completed", value }),
+        () => finish({ status: "failed" }),
+      );
     } catch {
-      finish(undefined);
+      finish({ status: "failed" });
     }
   });
+}
+
+async function getTimeoutProcessLogsBestEffort(
+  process: ReplyManagedProcess,
+  timeoutMs: number,
+): Promise<ReplyProcessLogs | undefined> {
+  const result = await runBoundedOperation(() => process.getLogs(), timeoutMs);
+  return result.status === "completed" && processLogs(result.value) ? result.value : undefined;
 }
 
 async function emitReplyTimeoutDiagnostics(
@@ -121,11 +142,25 @@ async function emitReplyTimeoutDiagnostics(
   timeoutKind: ReplyTimeoutKind,
 ): Promise<void> {
   try {
-    const logs = await getTimeoutProcessLogsBestEffort(process);
+    const deadline = Date.now() + REPLY_TIMEOUT_DIAGNOSTICS_TIMEOUT_MS;
+    const killBudgetMs = Math.min(
+      REPLY_TIMEOUT_KILL_TIMEOUT_MS,
+      Math.max(0, deadline - Date.now()),
+    );
+    const killResult = await runBoundedOperation(() => process.kill(), killBudgetMs);
+    const remainingBudgetMs = Math.max(0, deadline - Date.now());
+    const logs = remainingBudgetMs > 0
+      ? await getTimeoutProcessLogsBestEffort(process, remainingBudgetMs)
+      : undefined;
     emitTurnLog("warn", "mana_claude_timeout_diagnostics", event, trace, {
       outcome: "timeout",
       timeoutKind,
-      diagnosticStatus: logs ? "captured" : "unavailable",
+      // A timeout means the process may still be stopping while its logs are
+      // read. Keep that incompleteness visible instead of treating a captured
+      // snapshot as a complete process teardown.
+      diagnosticStatus: !logs
+        ? "unavailable"
+        : killResult.status === "completed" ? "captured" : "partial",
       ...(logs ? replyClaudeTimeoutDiagnostics(logs.stdout) : {}),
     });
   } catch {
@@ -599,11 +634,6 @@ export async function generateClaudeReply(
       const deadline = (options.nowMs?.() ?? Date.now()) + REPLY_SANDBOX_MAX_TIMEOUT_MS;
       let status = await process.getStatus();
       const diagnoseTimeout = async (timeoutKind: ReplyTimeoutKind) => {
-        try {
-          await process.kill();
-        } catch {
-          // Keep collecting diagnostics even when process termination fails.
-        }
         await emitReplyTimeoutDiagnostics(process, event, trace, timeoutKind);
       };
       while (status === "starting" || status === "running") {

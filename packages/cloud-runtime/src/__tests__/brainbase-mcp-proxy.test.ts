@@ -497,6 +497,97 @@ describe("Brainbase judgment Hook proxy", () => {
     }
   });
 
+  it("returns promptly when a Stop diagnostic response body never ends", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const encoder = new TextEncoder();
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"schema_version":"1"}'));
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response(upstream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+    try {
+      const startedAt = Date.now();
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/host/judgment/hook", {
+          method: "POST",
+          body: JSON.stringify({ hook_event_name: "Stop", stop_hook_active: true }),
+        }),
+        {
+          BRAINBASE_MCP_BASE_URL: "https://bb.example.test",
+          BRAINBASE_MCP_TOKEN: "token-secret",
+          BRAINBASE_JUDGMENT_PROJECT_CODE: "mana",
+        },
+        fetchImpl,
+      );
+
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      expect(response.status).toBe(200);
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))[1]).toMatchObject({
+        event: "brainbase_judgment_hook_diagnostic",
+        phase: "response",
+        status: 200,
+        response_kind: "invalid",
+        decision: "invalid",
+      });
+      const reader = response.body?.getReader();
+      const first = await reader?.read();
+      expect(first?.done).toBe(false);
+      void reader?.cancel().catch(() => undefined);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("skips an oversized Stop diagnostic body from the content length", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    let bodyRead = false;
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([123]));
+      },
+      pull(controller) {
+        bodyRead = true;
+        controller.close();
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response(upstream, {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(64 * 1024 + 1),
+      },
+    })) as unknown as typeof fetch;
+    try {
+      const response = await handleBrainbaseMcpProxyRequest(
+        new Request("https://brainbase-mcp.internal/host/judgment/hook", {
+          method: "POST",
+          body: JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false }),
+        }),
+        {
+          BRAINBASE_MCP_BASE_URL: "https://bb.example.test",
+          BRAINBASE_MCP_TOKEN: "token-secret",
+          BRAINBASE_JUDGMENT_PROJECT_CODE: "mana",
+        },
+        fetchImpl,
+      );
+
+      expect(response.status).toBe(200);
+      expect(bodyRead).toBe(false);
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))[1]).toMatchObject({
+        event: "brainbase_judgment_hook_diagnostic",
+        phase: "response",
+        response_kind: "invalid",
+        decision: "invalid",
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("rejects upstream redirects without following them", async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://evil.example" } })) as unknown as typeof fetch;
     const response = await handleBrainbaseMcpProxyRequest(

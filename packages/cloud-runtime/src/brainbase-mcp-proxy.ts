@@ -19,6 +19,8 @@ export interface BrainbaseMcpProxyPolicy {
 
 const COMPANY_AUTHORITY_HEADER = "x-brainbase-company-authority-response";
 const MAX_COMPANY_AUTHORITY_HEADER_BYTES = 12 * 1024;
+const MAX_JUDGMENT_HOOK_DIAGNOSTIC_BYTES = 64 * 1024;
+const JUDGMENT_HOOK_DIAGNOSTIC_TIMEOUT_MS = 250;
 
 function base64UrlEncodeUtf8(value: string): string {
   const bytes = new TextEncoder().encode(value);
@@ -193,6 +195,58 @@ function logJudgmentHookRequestDiagnostic(diagnosticRequest: JudgmentHookDiagnos
   } catch { /* Diagnostics are best effort and must not alter Hook semantics. */ }
 }
 
+async function readBoundedResponseText(response: Response): Promise<string | undefined> {
+  const declaredLength = Number(response.headers.get("content-length") ?? "NaN");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_JUDGMENT_HOOK_DIAGNOSTIC_BYTES) {
+    return undefined;
+  }
+
+  let clone: Response;
+  try {
+    clone = response.clone();
+  } catch {
+    return undefined;
+  }
+  if (!clone.body) return "";
+
+  const reader = clone.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = Date.now() + JUDGMENT_HOOK_DIAGNOSTIC_TIMEOUT_MS;
+  try {
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new Error("judgment_hook_diagnostic_timeout")),
+        Math.max(0, deadline - Date.now()));
+    });
+    while (true) {
+      if (Date.now() >= deadline) return undefined;
+      const result = await Promise.race([reader.read(), timeoutPromise]);
+      if (result.done) break;
+      const chunk = result.value;
+      const nextTotal = totalBytes + chunk.byteLength;
+      if (nextTotal > MAX_JUDGMENT_HOOK_DIAGNOSTIC_BYTES) return undefined;
+      chunks.push(chunk);
+      totalBytes = nextTotal;
+    }
+  } catch {
+    return undefined;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    // Cancellation is best effort. Awaiting it could retain the same
+    // unbounded stream that this diagnostic reader is abandoning.
+    void reader.cancel().catch(() => undefined);
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 async function logJudgmentHookResponseDiagnostic(
   response: Response,
   diagnosticRequest: JudgmentHookDiagnosticRequest,
@@ -201,7 +255,8 @@ async function logJudgmentHookResponseDiagnostic(
   try {
     let body: unknown;
     try {
-      body = JSON.parse(await response.clone().text());
+      const text = await readBoundedResponseText(response);
+      if (text !== undefined) body = JSON.parse(text);
     } catch {
       body = undefined;
     }
