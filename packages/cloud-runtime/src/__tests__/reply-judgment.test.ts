@@ -519,6 +519,28 @@ describe("Slack reply Judgment lifecycle", () => {
     });
   });
 
+  it("accepts an authenticated owner-audit read without treating its prefix as source evidence", () => {
+    const lines = stream().split("\n");
+    const stopIndex = lines.findIndex((line) => line.includes('"hook_event":"Stop"'));
+    lines.splice(stopIndex, 0,
+      JSON.stringify({ type: "assistant", session_id: "session-1", message: { content: [{
+        type: "tool_use", id: "audit-read", name: "mcp__brainbase__brainbase_judgment_audit_read",
+        input: { turn_ref: `${"a".repeat(64)}/${"b".repeat(64)}` },
+      }] } }),
+      JSON.stringify(hook("PostToolUse", "", "turn-1", {
+        tool_use_id: "audit-read", tool_name: "mcp__brainbase__brainbase_judgment_audit_read",
+      })),
+      JSON.stringify({ type: "user", session_id: "session-1", message: { content: [{
+        type: "tool_result", tool_use_id: "audit-read", content: JSON.stringify({
+          status: "ok", data: { prefix: `${judgmentLine}\n${zeroCallLine}` },
+        }),
+      }] } }),
+    );
+    expect(parseReplyJudgmentStream(lines.join("\n"))).toMatchObject({
+      stop: "completed", toolJournal: [], auditLines: [judgmentLine, zeroCallLine],
+    });
+  });
+
   it("does not count Judgment control-plane calls as Brainbase source reads", () => {
     const lines = stream().split("\n");
     const stopIndex = lines.findIndex((line) => line.includes('"hook_event":"Stop"'));
@@ -595,6 +617,8 @@ describe("Slack reply Judgment lifecycle", () => {
       ["different-resolve-turn", "mcp__brainbase__brainbase_resolve_turn",
         "reply_judgment_tool_audit_mismatch_posttool_receipt_binding_missing"],
       ["resolve-turn", "mcp__brainbase__brainbase_judgment_state_record",
+        "reply_judgment_tool_audit_mismatch_posttool_receipt_binding_missing"],
+      ["resolve-turn", "mcp__brainbase__brainbase_judgment_audit_read",
         "reply_judgment_tool_audit_mismatch_posttool_receipt_binding_missing"],
     ] as const) {
       const lines = stream().split("\n");

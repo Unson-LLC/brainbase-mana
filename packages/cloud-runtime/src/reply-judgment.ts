@@ -369,10 +369,11 @@ function hasBrainbaseAuditLine(lines: string[]): boolean {
 
 function isBrainbaseEvidenceTool(name: string): boolean {
   // These tools manage the Judgment lifecycle itself. They prove that the
-  // turn was classified/state-recorded, but they are not a Brainbase source
-  // read and therefore must not be paired with a knowledge-reference audit.
+  // turn was classified/state-recorded or its audit prefix was read. They are
+  // not source reads and must not be paired with a knowledge-reference audit.
   return name !== "mcp__brainbase__brainbase_resolve_turn"
-    && name !== "mcp__brainbase__brainbase_judgment_state_record";
+    && name !== "mcp__brainbase__brainbase_judgment_state_record"
+    && name !== "mcp__brainbase__brainbase_judgment_audit_read";
 }
 
 function isDirectBrainbaseTool(name: string): boolean {

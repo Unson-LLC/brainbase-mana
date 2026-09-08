@@ -19,6 +19,11 @@ const AUDIT_PREFIXES = [...JUDGMENT_AUDIT_PREFIXES, ...BRAINBASE_AUDIT_PREFIXES,
 const RECOVERABLE_BRAINBASE_TOOLS = new Set([
   "mcp__brainbase__brainbase_resolve_turn",
   "mcp__brainbase__brainbase_judgment_state_record",
+  "mcp__brainbase__brainbase_judgment_audit_read",
+]);
+const PRETOOL_DENIAL_CODES = new Set([
+  "judgment_resolve_turn_duplicate",
+  "judgment_resolve_turn_required_first",
 ]);
 
 // Meeting-minutes generation is a non-interactive, schema-constrained batch
@@ -46,10 +51,12 @@ function auditLinesFromText(value) {
     AUDIT_PREFIXES.some((prefix) => line.startsWith(prefix)));
 }
 
-function isInternalJudgmentStateTool(payload) {
+function isInternalJudgmentControlTool(payload) {
   const toolName = payload.tool_name ?? payload.toolName;
   return toolName === "brainbase_judgment_state_record"
-    || toolName === "mcp__brainbase__brainbase_judgment_state_record";
+    || toolName === "mcp__brainbase__brainbase_judgment_state_record"
+    || toolName === "brainbase_judgment_audit_read"
+    || toolName === "mcp__brainbase__brainbase_judgment_audit_read";
 }
 
 function isResolveTurnTool(payload) {
@@ -121,7 +128,7 @@ async function validatedOutput(envelope, payload, {
         || typeof payload.tool_name !== "string" || !payload.tool_name.trim())) {
     throw new Error("judgment_hook_tool_identity_missing");
   }
-  if (isPostToolEvent && !isInternalJudgmentStateTool(payload)
+  if (isPostToolEvent && !isInternalJudgmentControlTool(payload)
       && (typeof envelope.output.systemMessage !== "string" || !envelope.output.systemMessage.trim())) {
     throw new Error("judgment_hook_audit_not_recorded");
   }
@@ -405,6 +412,7 @@ async function resolveTurnId(payload) {
       turn_id: turnId,
       resolve_turn_completed: false,
       stop_repair_requested: false,
+      pretool_denials: [],
       ...boundary,
     });
     return turnId;
@@ -423,16 +431,51 @@ async function markStopRepairRequested(payload) {
   await updateTurnState(payload, (stored) => ({ ...stored, stop_repair_requested: true }));
 }
 
+async function recordPreToolDenial(payload, errorCode) {
+  if (!PRETOOL_DENIAL_CODES.has(errorCode)) return;
+  const toolUseId = payload.tool_use_id;
+  const toolName = payload.tool_name ?? payload.toolName;
+  if (typeof toolUseId !== "string" || !toolUseId.trim()
+      || typeof toolName !== "string" || !toolName.trim()
+      || !isBrainbaseTool({ tool_name: toolName })) {
+    return;
+  }
+  await updateTurnState(payload, (stored) => {
+    const current = Array.isArray(stored.pretool_denials) ? stored.pretool_denials : [];
+    const existing = current.find((entry) => entry?.tool_use_id === toolUseId);
+    if (existing) {
+      if (existing.tool_name !== toolName || existing.error_code !== errorCode) {
+        throw new Error("judgment_hook_pretool_denial_conflict");
+      }
+      return undefined;
+    }
+    return {
+      ...stored,
+      pretool_denials: [...current, {
+        tool_use_id: toolUseId,
+        tool_name: toolName,
+        error_code: errorCode,
+      }],
+    };
+  });
+}
+
 async function requireResolveTurnFirst(payload) {
   const { path, stored } = await readTurnState(payload);
   if (stored.turn_id !== payload.turn_id) throw new Error("judgment_turn_identity_mismatch");
   if (stored.resolve_turn_completed === true) {
-    if (isResolveTurnTool(payload)) throw new Error("judgment_resolve_turn_duplicate");
+    if (isResolveTurnTool(payload)) {
+      const errorCode = "judgment_resolve_turn_duplicate";
+      await recordPreToolDenial(payload, errorCode);
+      throw new Error(errorCode);
+    }
     return;
   }
   if (isResolveTurnTool(payload)) return;
+  const errorCode = "judgment_resolve_turn_required_first";
+  await recordPreToolDenial(payload, errorCode);
   throw new Error(
-    "judgment_resolve_turn_required_first: mcp__brainbase__brainbase_resolve_turnを最初に実行してください",
+    `${errorCode}: mcp__brainbase__brainbase_resolve_turnを最初に実行してください`,
   );
 }
 
@@ -472,6 +515,17 @@ async function completedToolReceipts(payload) {
   const { stored } = await readTurnState(payload);
   if (stored.turn_id !== payload.turn_id) throw new Error("judgment_turn_identity_mismatch");
   return Array.isArray(stored.tool_receipts) ? stored.tool_receipts : [];
+}
+
+function isRecordedPreToolDenial(call, stored) {
+  const denials = Array.isArray(stored.pretool_denials) ? stored.pretool_denials : [];
+  const denial = denials.find((entry) => entry?.tool_use_id === call?.tool_use_id);
+  if (!denial) return false;
+  if (!PRETOOL_DENIAL_CODES.has(denial.error_code)
+      || denial.tool_name !== call.tool_name || call.failed !== true) {
+    throw new Error("judgment_hook_pretool_denial_conflict");
+  }
+  return true;
 }
 
 function transcriptBlocks(record) {
@@ -576,7 +630,6 @@ async function readTranscriptLifecycleCalls(payload, stored) {
   for (const call of calls.values()) {
     const result = results.get(call.tool_use_id);
     if (!result) throw new Error("judgment_hook_transcript_tool_result_missing");
-    if (result.failed) throw new Error("judgment_hook_transcript_tool_failed");
     recovered.push({ ...call, ...result });
   }
   return recovered;
@@ -593,14 +646,20 @@ async function replayMissingLifecycleToolReceipts(payload) {
   const existing = Array.isArray(stored.tool_receipts) ? stored.tool_receipts : [];
   for (const call of calls) {
     const receipt = existing.find((entry) => entry?.tool_use_id === call.tool_use_id);
+    const hasPreToolDenial = isRecordedPreToolDenial(call, stored);
+    if (receipt && hasPreToolDenial) {
+      throw new Error("judgment_hook_pretool_denial_conflict");
+    }
+    if (hasPreToolDenial) continue;
+    const expectedOutcome = call.failed ? "error" : "success";
     if (receipt) {
-      if (receipt.tool_name !== call.tool_name || receipt.outcome !== "success") {
+      if (receipt.tool_name !== call.tool_name || receipt.outcome !== expectedOutcome) {
         throw new Error("judgment_hook_tool_receipt_conflict");
       }
       continue;
     }
     const replayPayload = {
-      hook_event_name: "PostToolUse",
+      hook_event_name: call.failed ? "PostToolUseFailure" : "PostToolUse",
       session_id: payload.session_id,
       transcript_path: payload.transcript_path,
       turn_id: payload.turn_id,
@@ -614,7 +673,9 @@ async function replayMissingLifecycleToolReceipts(payload) {
     // replay or Stop invocation is interrupted, this identity can be skipped
     // without sending a duplicate journal event to Brainbase.
     await recordCompletedToolReceipt(replayPayload);
-    if (isResolveTurnTool(replayPayload)) await markResolveTurnCompleted(replayPayload);
+    if (!call.failed && isResolveTurnTool(replayPayload)) {
+      await markResolveTurnCompleted(replayPayload);
+    }
     void output;
   }
 }
