@@ -1417,6 +1417,142 @@ describe("Brainbase judgment Hook forwarder", () => {
     expect(forwarded.filter((payload) => payload.hook_event_name === "PostToolUseFailure")).toHaveLength(1);
   });
 
+  it("replays a structured failed resolve once while preserving the later success at the fake Host boundary", async () => {
+    const forwarded: Array<Record<string, unknown>> = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(chunk as Buffer);
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      forwarded.push(payload);
+      const event = payload.hook_event_name;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        schema_version: "1", accepted: true,
+        hook_event_name: event, session_id: payload.session_id,
+        turn_id: payload.turn_id, receipt_id: `receipt-structured-replay-${forwarded.length}`,
+        ...(event === "UserPromptSubmit" ? { route_resolution_sha256: "f".repeat(64) } : {}),
+        output: event === "UserPromptSubmit"
+          ? { hookSpecificOutput: {
+            hookEventName: "UserPromptSubmit", additionalContext: "Judgment route resolved",
+          } }
+          : event === "PostToolUseFailure"
+            ? { systemMessage: "Brainbase lifecycle failure recorded" }
+            : event === "PostToolUse"
+              ? { systemMessage: "Brainbase lifecycle recorded" }
+              : {
+                schema_version: "brainbase-judgment-final-v1",
+                completion_status: "complete",
+                answer_digest: createHash("sha256")
+                  .update(String(payload.last_assistant_message ?? ""))
+                  .digest("hex"),
+              },
+      }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanup.push(async () => new Promise<void>((resolve) => server.close(() => resolve())));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test_server_missing");
+    const stateDir = await mkdtemp(join(tmpdir(), "mana-judgment-hook-"));
+    cleanup.push(() => rm(stateDir, { recursive: true, force: true }));
+    const transcriptPath = join(stateDir, "transcript.jsonl");
+    await writeFile(transcriptPath, `${JSON.stringify({ type: "user", message: { content: [] } })}\n`);
+    const env = {
+      BRAINBASE_JUDGMENT_HOOK_URL: `http://127.0.0.1:${address.port}/host/judgment/hook`,
+      BRAINBASE_JUDGMENT_TURN_DIR: stateDir,
+    };
+    const sessionId = "session-structured-failed-then-success";
+    expect((await runHook({
+      hook_event_name: "UserPromptSubmit", session_id: sessionId, transcript_path: transcriptPath,
+    }, env)).code).toBe(0);
+
+    const resolveName = "mcp__brainbase__brainbase_resolve_turn";
+    const failedId = "resolve-turn-structured-failed";
+    const successId = "resolve-turn-structured-success";
+    const turnRef = `${"1".repeat(64)}/${"2".repeat(64)}`;
+    const failedInput = { turn_ref: turnRef };
+    const successInput = { turn_ref: turnRef };
+    const failedResponse = { status: "error" };
+    const successResponse = { status: "ok" };
+
+    expect((await runHook({
+      hook_event_name: "PreToolUse", session_id: sessionId,
+      tool_use_id: failedId, tool_name: resolveName,
+    }, env)).code).toBe(0);
+    await appendFile(transcriptPath, [
+      {
+        type: "assistant",
+        message: { content: [{
+          type: "tool_use", id: failedId, name: resolveName, input: failedInput,
+        }] },
+      },
+      {
+        type: "user", toolUseResult: failedResponse,
+        message: { content: [{
+          type: "tool_result", tool_use_id: failedId,
+          content: [{ type: "text", text: JSON.stringify(failedResponse) }], is_error: true,
+        }] },
+      },
+      {
+        type: "assistant",
+        message: { content: [{
+          type: "tool_use", id: successId, name: resolveName, input: successInput,
+        }] },
+      },
+      {
+        type: "user", toolUseResult: successResponse,
+        message: { content: [{
+          type: "tool_result", tool_use_id: successId,
+          content: [{ type: "text", text: JSON.stringify(successResponse) }],
+        }] },
+      },
+    ].map((record) => `${JSON.stringify(record)}\n`).join(""));
+
+    expect((await runHook({
+      hook_event_name: "PreToolUse", session_id: sessionId,
+      tool_use_id: successId, tool_name: resolveName,
+    }, env)).code).toBe(0);
+    const recordedSuccess = await runHook({
+      hook_event_name: "PostToolUse", session_id: sessionId,
+      transcript_path: transcriptPath, tool_use_id: successId,
+      tool_name: resolveName, tool_input: successInput, tool_response: successResponse,
+    }, env);
+    expect(recordedSuccess.code).toBe(0);
+
+    const answer = "🧠 判断参照: 「依頼」を参照 → 対応 ✓\n📚 Brainbase未参照: 今回は検索不要 ✓\n本文";
+    const stopped = await runHook({
+      hook_event_name: "Stop", session_id: sessionId, transcript_path: transcriptPath,
+      last_assistant_message: answer,
+    }, env);
+    expect(stopped.code).toBe(0);
+    const failedReplay = forwarded.filter((payload) => payload.tool_use_id === failedId);
+    expect(failedReplay).toHaveLength(1);
+    expect(failedReplay[0]).toMatchObject({
+      hook_event_name: "PostToolUseFailure",
+      tool_name: resolveName,
+      tool_input: failedInput,
+      tool_response: failedResponse,
+    });
+    expect(forwarded.filter((payload) => payload.tool_use_id === failedId
+      && payload.hook_event_name === "PostToolUse")).toHaveLength(0);
+    const successfulCalls = forwarded.filter((payload) => payload.tool_use_id === successId);
+    expect(successfulCalls).toHaveLength(1);
+    expect(successfulCalls[0]).toMatchObject({
+      hook_event_name: "PostToolUse", tool_name: resolveName,
+      tool_input: successInput, tool_response: successResponse,
+    });
+    expect(forwarded.filter((payload) => payload.hook_event_name === "Stop")).toHaveLength(1);
+
+    const repeated = await runHook({
+      hook_event_name: "Stop", session_id: sessionId, transcript_path: transcriptPath,
+      last_assistant_message: answer,
+    }, env);
+    expect(repeated.code).toBe(0);
+    expect(forwarded.filter((payload) => payload.tool_use_id === failedId)).toHaveLength(1);
+    expect(forwarded.filter((payload) => payload.tool_use_id === successId)).toHaveLength(1);
+    expect(forwarded.filter((payload) => payload.hook_event_name === "PostToolUseFailure")).toHaveLength(1);
+    expect(forwarded.filter((payload) => payload.hook_event_name === "Stop")).toHaveLength(2);
+  });
+
   it("skips only an exact locally denied failed lifecycle call and conflicts on identity or result changes", async () => {
     const forwarded: Array<Record<string, unknown>> = [];
     const server = createServer(async (request, response) => {
