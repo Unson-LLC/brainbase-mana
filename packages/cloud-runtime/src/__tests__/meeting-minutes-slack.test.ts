@@ -92,8 +92,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("preserves primary diagnostics when Slack status projection also fails", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), status: "failed" as const,
       diagnostics: { schemaVersion: "meeting_minutes_diagnostics.v1" as const, stage: "github_save" as const,
@@ -133,7 +135,66 @@ describe("MeetingMinutesSlackClient", () => {
     expect(JSON.stringify(calls[1]?.body)).toContain("receipt-1");
     expect(JSON.stringify(calls[1]?.body)).not.toContain("再実行");
     expect(JSON.stringify(calls[1]?.body)).toContain("保存先をやり直す");
+    expect(calls[2]?.url).toBe("https://slack.com/api/chat.update");
+    expect(calls[2]?.body).toMatchObject({ channel: "C1", ts: "2.1" });
+    expect(JSON.stringify(calls[2]?.body)).toContain("最新の状況は、このスレッドの最新の案内を確認してください");
+    expect(JSON.stringify(calls[2]?.body)).not.toContain("actions");
   });
+
+  it("terminalizes a stale selector during a persisted task-only status retry", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const run = { ...routedRun(), processing: {
+      completedActionTs: "4.1", completedAt: "2026-09-08T03:26:09.771Z",
+    }, taskRegistration: { registered: [], failure: {
+      index: 0, stage: "task_registration" as const, failurePoint: "task_create" as const,
+      code: "canonical_task_mutation_not_ready", status: 503, message: "task api unavailable",
+      failedAt: "2026-09-08T03:26:09.771Z",
+    } } } as MeetingMinutesRun;
+
+    await new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus(run, "completed");
+
+    expect(calls[1]?.body).toMatchObject({ channel: "C1", ts: "3.1" });
+    expect(JSON.stringify(calls[1]?.body)).toContain("未完了のタスク連携を再実行できます");
+    expect(calls[2]?.body).toMatchObject({ channel: "C1", ts: "2.1" });
+    expect(JSON.stringify(calls[2]?.body)).toContain("最新の状況は、このスレッドの最新の案内を確認してください");
+    expect(JSON.stringify(calls[2]?.body)).not.toContain("actions");
+  });
+
+  it("does not overwrite a processing card when selector and processing timestamps are identical", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const run = { ...routedRun(), slack: { selectionTs: "3.1", processingTs: "3.1", postedChunkIndexes: [] } };
+
+    await new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus(run, "completed");
+
+    expect(calls.filter((call) => call.url === "https://slack.com/api/chat.update")).toHaveLength(1);
+    expect(calls[1]?.body).toMatchObject({ channel: "C1", ts: "3.1" });
+  });
+
+  it.each(["sourceThreadTs", "sourceMessageTs"] as const)(
+    "does not overwrite the %s source message when legacy selector coordinates alias it",
+    async (coordinate) => {
+      const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+      const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+        return Response.json({ ok: true });
+      }) as typeof fetch;
+      const run = { ...routedRun(), sourceThreadTs: "1.0", sourceMessageTs: "9.9",
+        slack: { selectionTs: coordinate === "sourceThreadTs" ? "1.0" : "9.9", processingTs: "3.1", postedChunkIndexes: [] } };
+
+      await new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus(run, "completed");
+
+      expect(calls.filter((call) => call.url === "https://slack.com/api/chat.update")).toHaveLength(1);
+      expect(calls[1]?.body).toMatchObject({ channel: "C1", ts: "3.1" });
+    },
+  );
 
   it("persists terminal readback only after Slack returns the exact updated source message", async () => {
     let updateText = "";
@@ -142,7 +203,8 @@ describe("MeetingMinutesSlackClient", () => {
       const url = input instanceof Request ? input.url : String(input);
       if (url.includes("assistant.threads.setStatus")) return Response.json({ ok: true });
       if (url.includes("chat.update")) {
-        updateText = String(JSON.parse(String(init?.body)).text);
+        const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        if (next.ts === "3.1") updateText = String(next.text);
         return Response.json({ ok: true });
       }
       if (url.includes("auth.test")) {
@@ -171,7 +233,8 @@ describe("MeetingMinutesSlackClient", () => {
       const url = input instanceof Request ? input.url : String(input);
       if (url.includes("assistant.threads.setStatus")) return Response.json({ ok: true });
       if (url.includes("chat.update")) {
-        updateText = String(JSON.parse(String(init?.body)).text);
+        const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        if (next.ts === "3.1") updateText = String(next.text);
         return Response.json({ ok: true });
       }
       if (url.includes("auth.test")) return Response.json({ ok: true, team_id: "T1", bot_id: "B1" });
@@ -258,8 +321,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("binds the current run revision to the redo button", async () => {
     let body: { blocks?: Array<{ elements?: Array<{ action_id?: string; value?: string }> }> } = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body));
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), revision: 1 };
     await new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus(run, "completed");
@@ -271,8 +336,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("shows when unknown Brainbase references were removed in observe mode", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), generated: { title: "定例", overview: "概要", body: "本文",
       brainbase_context_warnings: ["unknown_source_ref_removed" as const] } };
@@ -367,8 +434,9 @@ describe("MeetingMinutesSlackClient", () => {
       : Response.json({ ok: true })) as typeof fetch;
     await expect(new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus(routedRun(), "completed"))
       .resolves.toBeUndefined();
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(fetchImpl).toHaveBeenNthCalledWith(2, "https://slack.com/api/chat.update", expect.any(Object));
+    expect(fetchImpl).toHaveBeenNthCalledWith(3, "https://slack.com/api/chat.update", expect.objectContaining({ body: expect.stringContaining('"ts":"2.1"') }));
   });
 
   it("explains a canonical task project scope mismatch to the operator", async () => {
@@ -459,7 +527,7 @@ describe("MeetingMinutesSlackClient", () => {
     expect(JSON.stringify(calls[1]?.body)).toContain("議事録を作成中");
     expect(calls[2]).toMatchObject({ url: "https://slack.com/api/chat.update",
       body: { channel: "C1", ts: "2.1" } });
-    expect(JSON.stringify(calls[2]?.body)).toContain("最新の状況は、このスレッドの下の案内を確認してください");
+    expect(JSON.stringify(calls[2]?.body)).toContain("最新の状況は、このスレッドの最新の案内を確認してください");
     expect(JSON.stringify(calls[2]?.body)).not.toContain("actions");
   });
 
@@ -530,8 +598,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("replaces a failed result with a retry button for the selected destination", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     await new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus(routedRun(), "failed");
     expect(JSON.stringify(body)).toContain("議事録の作成に失敗しました");
@@ -544,8 +614,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("shows safe same-run diagnostics for an unclassified failure without exposing the raw error", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), status: "failed" as const,
       failure: { stage: "routed", message: "Authorization: Bearer secret-value raw upstream response" },
@@ -563,8 +635,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("does not recommend or offer retry when diagnostics say operator action is required", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), status: "failed" as const,
       failure: { stage: "routed", message: "meeting_minutes_transcript_changed" },
@@ -579,8 +653,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("explains that placeholder output was rejected before it was shared", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), failure: {
       stage: "routed", message: "meeting_minutes_generation_placeholder_output",
@@ -596,8 +672,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("requires an explicit redo when a saved meeting minutes file contains placeholders", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), failure: {
       stage: "generated", message: "meeting_minutes_persisted_placeholder_output",
@@ -682,8 +760,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("explains how to recover when the destination Slack channel is unavailable", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), status: "posting" as const,
       failure: { stage: "slack_parent", message: "slack_api_failed:chat.postMessage:channel_not_found" } };
@@ -698,8 +778,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("explains a permanent Brainbase project binding failure without offering retry", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), status: "routed" as const,
       failure: { stage: "routed", message: "meeting_minutes_context_request_failed:403" } };
@@ -714,8 +796,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("explains a Brainbase authentication failure without mislabeling it as a project binding", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), status: "routed" as const,
       failure: { stage: "routed", message: "meeting_minutes_context_request_failed:401" } };
@@ -938,8 +1022,10 @@ describe("MeetingMinutesSlackClient", () => {
 
   it("explains that only the task card remains when task registration already completed", async () => {
     let body: Record<string, unknown> = {};
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const next = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (String(input).endsWith("/chat.update") && next.ts === "3.1") body = next;
+      return Response.json({ ok: true });
     }) as typeof fetch;
     const run = { ...routedRun(), taskRegistration: {
       registered: [{ index: 0, title: "確認する", taskId: "task-1", status: "registered" as const }],
