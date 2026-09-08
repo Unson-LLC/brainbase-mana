@@ -16,7 +16,7 @@ export interface SlackSelectionMessage {
 }
 
 export function organizationSelectionMessage(runId: string, fileName: string,
-  destinations: readonly MeetingMinutesDestination[]): SlackSelectionMessage {
+  destinations: readonly MeetingMinutesDestination[], sourceThreadTs?: string): SlackSelectionMessage {
   const safeFileName = escapeUntrustedSlackMrkdwn(fileName);
   const preferredOrder = ["unson", "unson-business", "tech-knight"];
   const organizations = [...new Map(destinations.map((item) => [item.organization.id, item.organization])).values()]
@@ -29,12 +29,12 @@ export function organizationSelectionMessage(runId: string, fileName: string,
     { type: "actions", elements: organizations.map((organization) => ({ type: "button",
       text: { type: "plain_text", text: organization.name },
       action_id: `${MEETING_MINUTES_CHOOSE_ORGANIZATION_ACTION_ID}:${organization.id}`,
-      value: JSON.stringify({ runId, organizationId: organization.id, fileName }) })) },
+      value: JSON.stringify({ runId, organizationId: organization.id, fileName, ...(sourceThreadTs ? { sourceThreadTs } : {}) }) })) },
   ] };
 }
 
 export function projectSelectionMessage(runId: string, fileName: string, organizationId: string,
-  destinations: readonly MeetingMinutesDestination[]): SlackSelectionMessage {
+  destinations: readonly MeetingMinutesDestination[], sourceThreadTs?: string): SlackSelectionMessage {
   const safeFileName = escapeUntrustedSlackMrkdwn(fileName);
   const projects = destinations.filter((item) => item.organization.id === organizationId);
   if (!projects.length) throw new Error("meeting_minutes_organization_invalid");
@@ -43,9 +43,9 @@ export function projectSelectionMessage(runId: string, fileName: string, organiz
     { type: "section", text: { type: "mrkdwn", text: `*${safeFileName}* の保存先プロジェクトを選択してください。\n組織: *${organization.name}*` } },
     { type: "actions", elements: projects.map((destination) => ({ type: "button",
       text: { type: "plain_text", text: destination.name }, action_id: `${MEETING_MINUTES_CHOOSE_ACTION_ID}:${destination.id}`,
-      value: JSON.stringify({ runId, destinationId: destination.id, fileName }) })) },
+      value: JSON.stringify({ runId, destinationId: destination.id, fileName, ...(sourceThreadTs ? { sourceThreadTs } : {}) }) })) },
     { type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: "← 組織選択に戻る" },
-      action_id: MEETING_MINUTES_BACK_TO_ORGANIZATIONS_ACTION_ID, value: JSON.stringify({ runId, fileName }) }] },
+      action_id: MEETING_MINUTES_BACK_TO_ORGANIZATIONS_ACTION_ID, value: JSON.stringify({ runId, fileName, ...(sourceThreadTs ? { sourceThreadTs } : {}) }) }] },
   ] };
 }
 
@@ -188,7 +188,7 @@ export function suggestedDestinationMessage(run: MeetingMinutesRun,
           sourceThreadTs: run.sourceThreadTs }) },
       { type: "button", text: { type: "plain_text", text: "別の保存先を選ぶ" },
         action_id: MEETING_MINUTES_BACK_TO_ORGANIZATIONS_ACTION_ID,
-        value: JSON.stringify({ runId: run.runId, fileName: run.file.name }) },
+        value: JSON.stringify({ runId: run.runId, fileName: run.file.name, sourceThreadTs: run.sourceThreadTs }) },
     ] },
   ] };
 }
@@ -369,7 +369,7 @@ export class MeetingMinutesSlackClient {
     destinations: readonly MeetingMinutesDestination[]): Promise<string> {
     if (!run.slack?.selectionTs) return this.requestDestination(run, destinations);
     if (!destinations.length) throw new Error("meeting_minutes_destinations_empty");
-    const message = organizationSelectionMessage(run.runId, run.file.name, destinations);
+    const message = organizationSelectionMessage(run.runId, run.file.name, destinations, run.sourceThreadTs);
     await this.post("chat.update", { channel: run.sourceChannelId, ts: run.slack.selectionTs,
       text: message.text, blocks: message.blocks });
     return run.slack.selectionTs;
@@ -378,7 +378,7 @@ export class MeetingMinutesSlackClient {
   async requestDestination(run: MeetingMinutesRun, destinations: readonly MeetingMinutesDestination[]): Promise<string> {
     if (!destinations.length) throw new Error("meeting_minutes_destinations_empty");
     const message = suggestedDestinationMessage(run, destinations) ??
-      organizationSelectionMessage(run.runId, run.file.name, destinations);
+      organizationSelectionMessage(run.runId, run.file.name, destinations, run.sourceThreadTs);
     const result = await this.post("chat.postMessage", { channel: run.sourceChannelId, thread_ts: run.sourceThreadTs,
       text: message.text, client_msg_id: await clientMessageId(`${run.runId}-selection`), blocks: message.blocks });
     if (!result.ts) throw new Error("slack_response_ts_missing"); return result.ts;
@@ -527,7 +527,7 @@ export class MeetingMinutesSlackClient {
       }
       elements.push({ type: "button", text: { type: "plain_text", text: "保存先をやり直す" },
         action_id: MEETING_MINUTES_REDO_ACTION_ID,
-        value: JSON.stringify({ runId: run.runId, fileName: run.file.name, revision: run.revision ?? 0 }) });
+        value: JSON.stringify({ runId: run.runId, fileName: run.file.name, revision: run.revision ?? 0, sourceThreadTs: run.sourceThreadTs }) });
       blocks.push({ type: "actions", elements });
     } else if (!permanentBrainbaseFailure
       && (diagnosticFailure ?? run.projectionFailure)?.retryable !== false) {
@@ -693,7 +693,7 @@ export class MeetingMinutesSlackClient {
   async showDestinationSelection(run: MeetingMinutesRun,
     destinations: readonly MeetingMinutesDestination[]): Promise<string> {
     if (!run.slack?.processingTs) throw new Error("meeting_minutes_status_coordinates_missing");
-    const message = organizationSelectionMessage(run.runId, run.file.name, destinations);
+    const message = organizationSelectionMessage(run.runId, run.file.name, destinations, run.sourceThreadTs);
     await this.post("chat.update", { channel: run.sourceChannelId, ts: run.slack.processingTs,
       text: message.text, blocks: message.blocks });
     return run.slack.processingTs;
@@ -720,7 +720,7 @@ export class MeetingMinutesSlackClient {
   }
   async showRedoFailure(run: MeetingMinutesRun): Promise<void> {
     if (!run.slack?.processingTs) throw new Error("meeting_minutes_status_coordinates_missing");
-    const message = redoFailedMessage(run.runId, run.file.name, run.redo?.failure, run.revision ?? 0);
+    const message = redoFailedMessage(run.runId, run.file.name, run.redo?.failure, run.revision ?? 0, run.sourceThreadTs);
     try {
       await this.post("chat.update", { channel: run.sourceChannelId, ts: run.slack.processingTs,
         text: message.text, blocks: message.blocks });

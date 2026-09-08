@@ -1,10 +1,26 @@
-import { destinationSelectedMessage, immediateStatusFailedMessage, interactionActionFailedMessage, interactionEnqueueFailedMessage,
+import { organizationSelectionMessage, projectSelectionMessage, suggestedDestinationMessage, destinationSelectedMessage, immediateStatusFailedMessage, interactionActionFailedMessage, interactionEnqueueFailedMessage,
   selectionConfirmationFailedMessage, statusProjectionFailedMessage, tenantInteractionFailedMessage,
   threadCoordinateMissingMessage, MeetingMinutesSlackClient, redoFailedMessage } from "../meeting-minutes-slack.js";
 import { meetingMinutesTaskActionFailure, type MeetingMinutesRun } from "../meeting-minutes-contracts.js";
 import { deriveCorrelationId } from "../multitenancy/ids.js";
 
 describe("MeetingMinutesSlackClient", () => {
+  it("preserves the source thread in every workspace, project, back and suggestion button", () => {
+    const run = routedRun();
+    const destinations = [run.destination];
+    const messages = [
+      organizationSelectionMessage(run.runId, run.file.name, destinations, run.sourceThreadTs),
+      projectSelectionMessage(run.runId, run.file.name, run.destination.organization.id, destinations, run.sourceThreadTs),
+      suggestedDestinationMessage({ ...run, routing: { evaluated: true, suggestedDestinationId: run.destination.id } }, destinations)!,
+    ];
+    for (const message of messages) {
+      const buttons = message.blocks.flatMap((block) =>
+        (block.elements ?? []) as Array<{ value: string }>);
+      expect(buttons.length).toBeGreaterThan(0);
+      for (const button of buttons) expect(JSON.parse(button.value)).toMatchObject({ sourceThreadTs: run.sourceThreadTs });
+    }
+  });
+
   it("offers a fresh confirmation for a stale button without modifying the current status", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true })));
     const run: MeetingMinutesRun = routedRun();
@@ -215,11 +231,12 @@ describe("MeetingMinutesSlackClient", () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       body = JSON.parse(String(init?.body)); return Response.json({ ok: true });
     }) as typeof fetch;
-    await new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus({ ...routedRun(), revision: 1 }, "completed");
+    const run = { ...routedRun(), revision: 1 };
+    await new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus(run, "completed");
     const redoButton = body.blocks?.flatMap((block) => block.elements ?? [])
       .find((element) => element.action_id === "mana_meeting_minutes_redo");
     expect(redoButton?.value).toBeDefined();
-    expect(JSON.parse(redoButton!.value!)).toMatchObject({ runId: "run-1", revision: 1 });
+    expect(JSON.parse(redoButton!.value!)).toMatchObject({ runId: "run-1", revision: 1, sourceThreadTs: run.sourceThreadTs });
   });
 
   it("shows when unknown Brainbase references were removed in observe mode", async () => {
@@ -578,7 +595,7 @@ describe("MeetingMinutesSlackClient", () => {
       .flatMap((block) => block.elements ?? [])
       .find((element) => element.action_id === "mana_meeting_minutes_confirm_redo");
     expect(retryButton?.value).toBeDefined();
-    expect(JSON.parse(retryButton!.value!)).toMatchObject({ runId: "run-1", revision: 1 });
+    expect(JSON.parse(retryButton!.value!)).toMatchObject({ runId: "run-1", revision: 1, sourceThreadTs: run.sourceThreadTs });
   });
 
   it("explains how to recover a pending task registration before retrying redo", () => {
