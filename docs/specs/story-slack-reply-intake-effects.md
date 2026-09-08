@@ -26,3 +26,9 @@ Company Authorityの通常返信経路は単一の返信を所有し、共有pip
 ## 実装時の検証結果
 
 元のindex.tsで新しい受付成功テストがAUTHORITY_SCOPE_MISMATCHにより失敗することを確認した。診断テストは修正前5件失敗から成功へ変わった。受付・返信・既存配線の160件とcloud-runtime型検査が成功。本番の表示開始・解除は配備後に確認する。
+
+## Company Authorityの引継ぎ
+
+本番の受付検証で、旧tenant-context再取得がcompany_authority_v1を保持せず、厳密な権限比較で拒否されることを確認した。受付操作では元のCompany Authority依頼からdelivery.event_idと操作別のcorrelation_idを決定的に派生させ、同じ本人・対象・権限・効果で署名済み情報を取り直す。元の権限集合との比較は維持し、判定がauto以外なら外部操作を実行しない。
+
+本番と同じcapability集合を持つテストで旧経路の拒否を再現した。修正後は受付操作が成功し、元依頼の引継ぎ、本人・プロジェクト・追加権限の変化の拒否、署名済みapproval/human_action判定の拒否を検証する。
