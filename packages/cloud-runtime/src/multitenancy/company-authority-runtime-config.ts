@@ -15,11 +15,24 @@ export interface CompanyAuthorityRuntimeConfigEnv {
   BRAINBASE_TENANT_CONTEXT_JWKS_JSON?: string;
 }
 
-export interface CompanyAuthoritySlackRolloutTuple {
+export interface CompanyAuthoritySlackUserRolloutTuple {
   readonly workspace_id: string;
   readonly channel_id: string;
   readonly authenticated_subject_id: string;
 }
+
+export interface CompanyAuthoritySlackIntegrationRolloutTuple {
+  readonly workspace_id: string;
+  readonly channel_id: string;
+  /** Slack app that authored the event (`event.app_id`), not the receiving Events API app. */
+  readonly source_app_id: string;
+  /** Canonical Company Authority identity for the trusted integration, not the message author. */
+  readonly authority_subject_id: string;
+}
+
+export type CompanyAuthoritySlackRolloutTuple =
+  | CompanyAuthoritySlackUserRolloutTuple
+  | CompanyAuthoritySlackIntegrationRolloutTuple;
 
 export type CompanyAuthorityRuntimeConfiguration =
   | { readonly state: "disabled" }
@@ -158,10 +171,17 @@ function parseOperations(value: string): Readonly<Record<string, CompanyAuthorit
   ) as Record<string, CompanyAuthorityDesiredEffect>;
 }
 
-const COMPANY_AUTHORITY_SLACK_ROLLOUT_KEYS = [
+const COMPANY_AUTHORITY_SLACK_USER_ROLLOUT_KEYS = [
   "workspace_id",
   "channel_id",
   "authenticated_subject_id",
+] as const;
+
+const COMPANY_AUTHORITY_SLACK_INTEGRATION_ROLLOUT_KEYS = [
+  "workspace_id",
+  "channel_id",
+  "source_app_id",
+  "authority_subject_id",
 ] as const;
 
 function parseSlackRollout(value: string): readonly CompanyAuthoritySlackRolloutTuple[] {
@@ -182,21 +202,38 @@ function parseSlackRollout(value: string): readonly CompanyAuthoritySlackRollout
     }
     const record = candidate as Record<string, unknown>;
     const keys = Object.keys(record);
-    if (keys.length !== COMPANY_AUTHORITY_SLACK_ROLLOUT_KEYS.length
-      || keys.some((key) => !COMPANY_AUTHORITY_SLACK_ROLLOUT_KEYS.includes(key as typeof COMPANY_AUTHORITY_SLACK_ROLLOUT_KEYS[number]))) {
+    const isUserTuple = keys.length === COMPANY_AUTHORITY_SLACK_USER_ROLLOUT_KEYS.length
+      && keys.every((key) => COMPANY_AUTHORITY_SLACK_USER_ROLLOUT_KEYS.includes(
+        key as typeof COMPANY_AUTHORITY_SLACK_USER_ROLLOUT_KEYS[number],
+      ));
+    const isIntegrationTuple = keys.length === COMPANY_AUTHORITY_SLACK_INTEGRATION_ROLLOUT_KEYS.length
+      && keys.every((key) => COMPANY_AUTHORITY_SLACK_INTEGRATION_ROLLOUT_KEYS.includes(
+        key as typeof COMPANY_AUTHORITY_SLACK_INTEGRATION_ROLLOUT_KEYS[number],
+      ));
+    if (!isUserTuple && !isIntegrationTuple) {
       invalid({ binding: "MANA_COMPANY_AUTHORITY_SLACK_ROLLOUT_JSON" });
     }
-    const values = COMPANY_AUTHORITY_SLACK_ROLLOUT_KEYS.map((key) => record[key]);
+    const tupleKeys = isUserTuple
+      ? COMPANY_AUTHORITY_SLACK_USER_ROLLOUT_KEYS
+      : COMPANY_AUTHORITY_SLACK_INTEGRATION_ROLLOUT_KEYS;
+    const values = tupleKeys.map((key) => record[key]);
     if (values.some((value) => typeof value !== "string"
       || value.trim().length === 0
       || /[*?]/.test(value))) {
       invalid({ binding: "MANA_COMPANY_AUTHORITY_SLACK_ROLLOUT_JSON" });
     }
-    const tuple: CompanyAuthoritySlackRolloutTuple = {
-      workspace_id: (values[0] as string).trim(),
-      channel_id: (values[1] as string).trim(),
-      authenticated_subject_id: (values[2] as string).trim(),
-    };
+    const tuple: CompanyAuthoritySlackRolloutTuple = isUserTuple
+      ? {
+        workspace_id: (values[0] as string).trim(),
+        channel_id: (values[1] as string).trim(),
+        authenticated_subject_id: (values[2] as string).trim(),
+      }
+      : {
+        workspace_id: (values[0] as string).trim(),
+        channel_id: (values[1] as string).trim(),
+        source_app_id: (values[2] as string).trim(),
+        authority_subject_id: (values[3] as string).trim(),
+      };
     const duplicateKey = JSON.stringify(tuple);
     if (seen.has(duplicateKey)) {
       invalid({ binding: "MANA_COMPANY_AUTHORITY_SLACK_ROLLOUT_JSON" });

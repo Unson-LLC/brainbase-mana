@@ -312,11 +312,12 @@ describe("会社別Cloudflare deployment", () => {
     });
   });
 
-  it("routes only the exact Zapier meeting-router identity through company authority", () => {
+  it("binds the exact Zapier source app and meeting-router channel to its service authority subject", () => {
     expect(JSON.parse(unson.vars.MANA_COMPANY_AUTHORITY_SLACK_ROLLOUT_JSON)).toContainEqual({
       workspace_id: "T0882T8N9UH",
       channel_id: "C0BKTFQ9V38",
-      authenticated_subject_id: "U0BL94R9UJE",
+      source_app_id: "A024R9PQM",
+      authority_subject_id: "U0BL94R9UJE",
     });
   });
 

@@ -396,6 +396,7 @@ describe("handleTenantSlackRequest diagnostics", () => {
       "x-slack-signature": signature(nowSeconds, `${body}tampered`),
     }, body });
     const companyAuthorityResolve = vi.fn();
+    const notifyAuthorityHold = vi.fn();
     const legacyAuthority = {
       resolve_workspace_connection: vi.fn(), read_workspace_connection: vi.fn(), issue_tenant_context: vi.fn(),
     };
@@ -418,12 +419,14 @@ describe("handleTenantSlackRequest diagnostics", () => {
         },
         send: vi.fn(),
       },
+      notify_authority_hold: notifyAuthorityHold,
       send: vi.fn(),
     });
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "slack_signature_invalid" });
     expect(companyAuthorityResolve).not.toHaveBeenCalled();
+    expect(notifyAuthorityHold).not.toHaveBeenCalled();
     expect(legacyAuthority.resolve_workspace_connection).not.toHaveBeenCalled();
   });
 
@@ -536,6 +539,115 @@ describe("handleTenantSlackRequest diagnostics", () => {
     expect(legacyAuthority.resolve_workspace_connection).not.toHaveBeenCalled();
     expect(legacySend).not.toHaveBeenCalled();
     log.mockRestore();
+  });
+
+  it("authorizes a signed event through its trusted app and channel instead of its message author", async () => {
+    const body = JSON.stringify({
+      type: "event_callback", api_app_id: "A_UNSON", team_id: "T_UNSON", event_id: "EvTrustedApp",
+      event: { type: "message", channel: "C_ROUTER", ts: "1786420000.000625",
+        user: "U_NOT_REGISTERED", app_id: "A_ZAPIER", text: "meeting transcript" },
+    });
+    const request = new Request("https://example.com/slack/events", { method: "POST", headers: {
+      "content-type": "application/json", "x-slack-request-timestamp": String(nowSeconds),
+      "x-slack-signature": signature(nowSeconds, body),
+    }, body });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const companyAuthorityResolve = vi.fn().mockRejectedValue(
+      Object.assign(new Error("authority unavailable"), { code: "AUTHORITY_UNAVAILABLE" }),
+    );
+    const legacyAuthority = {
+      resolve_workspace_connection: vi.fn(), read_workspace_connection: vi.fn(), issue_tenant_context: vi.fn(),
+    };
+    const notifyAuthorityHold = vi.fn();
+
+    const response = await handleTenantSlackRequest(request, {
+      signing_secret: signingSecret, expected_app_id: "A_UNSON", now_ms: nowSeconds * 1_000,
+      required_scopes: ["files:read"],
+      required_authorization: { audience: "mana-runtime", capability_id: "runtime.execute" },
+      placement_config: { tenantId: "unson", workspaceId: "T_UNSON", placements: [{
+        placementId: "minutes", channelId: "C_ROUTER", projectCodes: ["mana"], taskWriteEnabled: true,
+      }] },
+      authority: legacyAuthority,
+      resolve_verification_key: async () => undefined,
+      company_authority: {
+        opted_in_capability_ids: ["runtime.execute"],
+        desired_effect_by_capability: { "runtime.execute": "external_side_effect" },
+        client: { resolve: companyAuthorityResolve },
+        acceptance: {
+          expected_audience: "mana-runtime", expected_deployment_id: "worker-test", public_jwk: {},
+        },
+        slack_rollout: [{
+          workspace_id: "T_UNSON", channel_id: "C_ROUTER",
+          source_app_id: "A_ZAPIER", authority_subject_id: "svc_meeting_router",
+        }],
+        send: vi.fn(),
+      },
+      notify_authority_hold: notifyAuthorityHold,
+      send: vi.fn(),
+    });
+
+    expect(response.status).toBe(503);
+    expect(companyAuthorityResolve).toHaveBeenCalledWith(expect.objectContaining({
+      provider_identity: expect.objectContaining({
+        authenticated_subject_id: "svc_meeting_router",
+        app_id: "A_UNSON",
+      }),
+      delivery: expect.objectContaining({ channel_id: "C_ROUTER" }),
+    }));
+    expect(legacyAuthority.resolve_workspace_connection).not.toHaveBeenCalled();
+    expect(notifyAuthorityHold).toHaveBeenCalledOnce();
+    expect(notifyAuthorityHold).toHaveBeenCalledWith({
+      channel_id: "C_ROUTER",
+      thread_ts: "1786420000.000625",
+      event_id: "EvTrustedApp",
+      error_code: "AUTHORITY_UNAVAILABLE",
+    });
+    log.mockRestore();
+  });
+
+  it("does not notify or select Company Authority when the source app differs", async () => {
+    const body = JSON.stringify({
+      type: "event_callback", api_app_id: "A_UNSON", team_id: "T_UNSON", event_id: "EvOtherSource",
+      event: { type: "message", channel: "C_ROUTER", ts: "1786420000.000626",
+        app_id: "A_OTHER", text: "meeting transcript" },
+    });
+    const request = new Request("https://example.com/slack/events", { method: "POST", headers: {
+      "content-type": "application/json", "x-slack-request-timestamp": String(nowSeconds),
+      "x-slack-signature": signature(nowSeconds, body),
+    }, body });
+    const companyAuthorityResolve = vi.fn();
+    const notifyAuthorityHold = vi.fn();
+    const legacyAuthority = {
+      resolve_workspace_connection: vi.fn(), read_workspace_connection: vi.fn(), issue_tenant_context: vi.fn(),
+    };
+
+    const response = await handleTenantSlackRequest(request, {
+      signing_secret: signingSecret, expected_app_id: "A_UNSON", now_ms: nowSeconds * 1_000,
+      required_scopes: ["files:read"],
+      required_authorization: { audience: "mana-runtime", capability_id: "runtime.execute" },
+      placement_config: { tenantId: "unson", workspaceId: "T_UNSON", placements: [{
+        placementId: "minutes", channelId: "C_ROUTER", projectCodes: ["mana"], taskWriteEnabled: true,
+      }] },
+      authority: legacyAuthority,
+      resolve_verification_key: async () => undefined,
+      company_authority: {
+        opted_in_capability_ids: ["runtime.execute"],
+        desired_effect_by_capability: { "runtime.execute": "external_side_effect" },
+        client: { resolve: companyAuthorityResolve },
+        acceptance: { expected_audience: "mana-runtime", expected_deployment_id: "worker-test", public_jwk: {} },
+        slack_rollout: [{ workspace_id: "T_UNSON", channel_id: "C_ROUTER",
+          source_app_id: "A_ZAPIER", authority_subject_id: "svc_meeting_router" }],
+        send: vi.fn(),
+      },
+      notify_authority_hold: notifyAuthorityHold,
+      send: vi.fn(),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "slack_event_invalid" });
+    expect(companyAuthorityResolve).not.toHaveBeenCalled();
+    expect(notifyAuthorityHold).not.toHaveBeenCalled();
+    expect(legacyAuthority.resolve_workspace_connection).not.toHaveBeenCalled();
   });
 
   it("fails closed before legacy or Queue effects when Company Authority evidence is not collected", async () => {

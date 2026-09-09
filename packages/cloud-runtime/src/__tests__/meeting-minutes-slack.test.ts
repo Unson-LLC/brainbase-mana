@@ -393,6 +393,20 @@ describe("MeetingMinutesSlackClient", () => {
     expect(fallbackText).toMatch(/問い合わせID: cor_[0-9A-HJKMNP-TV-Z]{26}/);
   });
 
+  it("posts an authority hold notice to the source thread without internal error details", async () => {
+    let call: { url: string; body: Record<string, unknown> } | undefined;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      call = { url: String(input), body: JSON.parse(String(init?.body)) };
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    await new MeetingMinutesSlackClient("token", fetchImpl).postAuthorityHold("C1", "1.0", "event-1");
+    expect(call?.url).toBe("https://slack.com/api/chat.postMessage");
+    expect(call?.body).toMatchObject({ channel: "C1", thread_ts: "1.0" });
+    expect(String(call?.body.client_msg_id)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.stringify(call?.body)).toContain("権限を確認できなかったため");
+    expect(JSON.stringify(call?.body)).not.toContain("AUTHORITY_");
+  });
+
   it("explains a blocked queued command privately to the operator", async () => {
     let call: { url: string; body: Record<string, unknown> } | undefined;
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

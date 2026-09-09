@@ -16,6 +16,7 @@ import {
   type CompanyAuthorityDesiredEffect,
   type CompanyAuthorityRuntimeEnvelope,
   type TenantAuthorityClient,
+  type TenantContextEnvelope,
   type TenantContextIssueRequest,
   type TenantQueueBody,
 } from "./multitenancy/index.js";
@@ -70,6 +71,12 @@ export interface HandleTenantSlackRequestOptions {
     send(event: CompanyAuthorityRuntimeEnvelope<SlackQueueEvent>): Promise<unknown>;
   };
   now_ms?: number;
+  notify_authority_hold?(input: {
+    channel_id: string;
+    thread_ts: string;
+    event_id: string;
+    error_code: string;
+  }): Promise<void>;
   resolve_verification_key(keyId: string): Promise<CryptoKey | undefined>;
   send(event: TenantQueueBody<SlackQueueEvent>): Promise<unknown>;
 }
@@ -89,13 +96,41 @@ function matchesCompanyAuthoritySlackRollout(
   identity: {
     workspace_id: string;
     channel_id: string;
-    authenticated_subject_id: string;
+    source_app_id?: string;
+    authenticated_subject_id?: string;
   },
+): { selected: boolean; authority_subject_id: string } {
+  if (rollout === undefined) {
+    return {
+      selected: identity.authenticated_subject_id !== undefined,
+      authority_subject_id: identity.authenticated_subject_id ?? "",
+    };
+  }
+  const candidate = rollout.find((entry) => entry.workspace_id === identity.workspace_id
+    && entry.channel_id === identity.channel_id
+    && ("authenticated_subject_id" in entry
+      ? entry.authenticated_subject_id === identity.authenticated_subject_id
+      : entry.source_app_id === identity.source_app_id));
+  if (!candidate) return { selected: false, authority_subject_id: identity.authenticated_subject_id ?? "" };
+  return {
+    selected: true,
+    authority_subject_id: "authenticated_subject_id" in candidate
+      ? candidate.authenticated_subject_id
+      : candidate.authority_subject_id,
+  };
+}
+
+function isTrustedIntegrationRollout(
+  rollout: readonly CompanyAuthoritySlackRolloutTuple[] | undefined,
+  workspaceId: string,
+  channelId: string,
+  sourceAppId: string | undefined,
 ): boolean {
-  if (rollout === undefined) return true;
-  return rollout.some((candidate) => candidate.workspace_id === identity.workspace_id
-    && candidate.channel_id === identity.channel_id
-    && candidate.authenticated_subject_id === identity.authenticated_subject_id);
+  return sourceAppId !== undefined && rollout?.some((entry) =>
+    !("authenticated_subject_id" in entry)
+    && entry.workspace_id === workspaceId
+    && entry.channel_id === channelId
+    && entry.source_app_id === sourceAppId) === true;
 }
 
 function normalizeSlackFiles(value: unknown): SlackFileReference[] | undefined {
@@ -189,6 +224,7 @@ export function normalizeSlackEvent(
   }
 
   const userId = nonEmptyString(payload.event.user);
+  const sourceAppId = nonEmptyString(payload.event.app_id);
   const botId = nonEmptyString(payload.event.bot_id);
   const subtype = nonEmptyString(payload.event.subtype);
   const channelType = nonEmptyString(payload.event.channel_type);
@@ -210,6 +246,7 @@ export function normalizeSlackEvent(
     threadTs: nonEmptyString(payload.event.thread_ts) ?? messageTs,
     messageTs,
     ...(userId ? { userId } : {}),
+    ...(sourceAppId ? { sourceAppId } : {}),
     ...(botId ? { botId } : {}),
     ...(subtype ? { subtype } : {}),
     eventType,
@@ -390,12 +427,14 @@ export async function handleTenantSlackRequest(
   const messageTs = nonEmptyString(payload.event.ts);
   const threadTs = nonEmptyString(payload.event.thread_ts) ?? messageTs;
   const requesterId = nonEmptyString(payload.event.user);
+  const sourceAppId = nonEmptyString(payload.event.app_id);
   const enterpriseId = nonEmptyString(payload.context_enterprise_id) ?? nonEmptyString(payload.enterprise_id);
-  if (!workspaceId || !eventId || !channelId || !messageTs || !threadTs || !requesterId) {
+  if (!workspaceId || !eventId || !channelId || !messageTs || !threadTs) {
     return jsonResponse({ error: "slack_event_invalid" }, 400);
   }
 
   let failureStage: SlackIngressFailureStage = "event_normalization";
+  let trustedIntegrationSelected = false;
   try {
     const receivedAt = new Date(options.now_ms ?? Date.now()).toISOString();
     const event = normalizeSlackEvent(
@@ -415,12 +454,16 @@ export async function handleTenantSlackRequest(
     };
     failureStage = "tenant_context_resolution";
     const companyAuthority = options.company_authority;
-    const companyAuthoritySelected = companyAuthority?.opted_in_capability_ids.includes(requiredAuthorization.capability_id)
-      && matchesCompanyAuthoritySlackRollout(companyAuthority.slack_rollout, {
+    const companyAuthorityRollout = matchesCompanyAuthoritySlackRollout(companyAuthority?.slack_rollout, {
         workspace_id: workspaceId,
         channel_id: channelId,
-        authenticated_subject_id: requesterId,
+        ...(sourceAppId ? { source_app_id: sourceAppId } : {}),
+        ...(requesterId ? { authenticated_subject_id: requesterId } : {}),
       });
+    const companyAuthoritySelected = companyAuthority?.opted_in_capability_ids.includes(requiredAuthorization.capability_id)
+      && companyAuthorityRollout.selected;
+    trustedIntegrationSelected = companyAuthoritySelected === true
+      && isTrustedIntegrationRollout(companyAuthority?.slack_rollout, workspaceId, channelId, sourceAppId);
     if (companyAuthority && companyAuthoritySelected) {
       if (placementProjectIds.length !== 1) {
         throw new TenantBoundaryError(
@@ -446,7 +489,7 @@ export async function handleTenantSlackRequest(
         observation: {
           provider: "slack",
           authentication: { status: "verified", scheme: "slack_signature_v0" },
-          authenticated_subject_id: requesterId,
+          authenticated_subject_id: companyAuthorityRollout.authority_subject_id,
           workspace_id: workspaceId,
           app_id: options.expected_app_id,
           ...(enterpriseId ? { enterprise_id: enterpriseId } : {}),
@@ -468,9 +511,23 @@ export async function handleTenantSlackRequest(
       });
       assertSecretArtifactFree(accepted.envelope);
       failureStage = "queue_enqueue";
+      if (accepted.decision === "auto" && isTrustedIntegrationRollout(companyAuthority.slack_rollout,
+        workspaceId, channelId, sourceAppId)) {
+        const serviceEvent: SlackQueueEvent = {
+          ...companyAuthorityEvent,
+          userId: companyAuthorityRollout.authority_subject_id,
+        };
+        await options.send({
+          schema_version: "1.0",
+          tenant_context: structuredClone(accepted.context.tenant_context as unknown as TenantContextEnvelope),
+          payload: serviceEvent,
+        });
+        return jsonResponse({ ok: true }, 200);
+      }
       await companyAuthority.send(accepted.envelope);
       return jsonResponse({ ok: true }, 200);
     }
+    if (!requesterId) return jsonResponse({ error: "slack_event_invalid" }, 400);
     const resolved = await resolveSlackWorkerIngress({
       identity: {
         provider: "slack",
@@ -499,6 +556,27 @@ export async function handleTenantSlackRequest(
     await options.send(message);
     return jsonResponse({ ok: true }, 200);
   } catch (error) {
+    const errorCode = error instanceof TenantBoundaryError || error instanceof RuntimeBindingError
+      ? error.code : "WORKSPACE_CONNECTION_UNAVAILABLE";
+    if (trustedIntegrationSelected && failureStage === "tenant_context_resolution"
+      && options.notify_authority_hold) {
+      try {
+        await options.notify_authority_hold({
+          channel_id: channelId,
+          thread_ts: threadTs,
+          event_id: eventId,
+          error_code: errorCode,
+        });
+      } catch (notificationError) {
+        console.error(JSON.stringify({
+          event: "slack_authority_hold_notification_failed",
+          event_id: eventId,
+          channel_id: channelId,
+          code: "STATUS_PROJECTION_FAILED",
+          ...(notificationError instanceof Error ? { error_name: notificationError.name.slice(0, 64) } : {}),
+        }));
+      }
+    }
     return tenantSlackIngressFailureResponse({
       error,
       stage: failureStage,
