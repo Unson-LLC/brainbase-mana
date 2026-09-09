@@ -120,7 +120,7 @@ function matchesCompanyAuthoritySlackRollout(
   };
 }
 
-function isTrustedIntegrationRollout(
+export function isTrustedIntegrationRollout(
   rollout: readonly CompanyAuthoritySlackRolloutTuple[] | undefined,
   workspaceId: string,
   channelId: string,

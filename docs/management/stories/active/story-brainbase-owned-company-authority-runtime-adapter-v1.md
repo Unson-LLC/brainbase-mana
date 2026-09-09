@@ -42,7 +42,7 @@ A0は、Brainbase producerのexact source lock、`ObservedExecutionRequestV1`、
 - [ ] AC-010: 最初のRED testは、明示的runtime routing selectorがoperationをopt-in済みと判定した後に呼ぶ共通Worker基盤境界を直接実行し、authority endpoint取得不能時に`AUTHORITY_UNAVAILABLE`、business callback 0、legacy fallback 0を観測する。`company_authority_v1` marker単独ではこの境界を選択しない。実HTTP ingressの設定選択も同じfail-closed clientへ接続し、live endpointやsecretを必要とせず副作用0を検証する。本番値・live transport・本番readbackは別途必要とする。
 - [ ] AC-011: duplicate／redeliveryでは、model、Brainbase write、external side effect、Slack deliveryを各1回以下にし、OperationReceipt、UsageEvent、authority receipt、readbackを同一correlation IDへ結ぶ。
 - [ ] AC-012: 本番完了判定には、2 tenant × 2 person、7 runtime surface、read／write／approval／deny、negative effect 0、exactly-once、same-correlation、鍵rotation／revocation、exact deploy readbackの同一run証拠を要求する。
-- [ ] AC-013: 外部連携の自動投稿は、チャンネル参加者を自動登録せず、Slack署名、受信app、workspace、channel、送信元`event.app_id`の完全一致で選択する。設定した安定service subjectでCompany Authorityを解決し、`auto`受理時だけ既存の議事録Queueへ送る。権限を確認できない場合はbusiness effectを0回に保ち、内部codeを露出しない保留案内を元threadへ投稿する。署名不正、受信app不一致、配置不一致、送信元app不一致では案内も投稿しない。
+- [ ] AC-013: 外部連携の自動投稿は、チャンネル参加者を自動登録せず、Slack署名、受信app、workspace、channel、送信元`event.app_id`の完全一致で選択する。設定した安定service subjectでCompany Authorityを解決し、`auto`受理時だけ既存の議事録Queueへ送る。Zapierがファイル付き投稿を`bot_message`として送る場合も、この信頼タプルが一致し、かつ対象チャンネルの`.txt`添付であるときだけ議事録として受理する。権限を確認できない場合はbusiness effectを0回に保ち、内部codeを露出しない保留案内を元threadへ投稿する。署名不正、受信app不一致、配置不一致、送信元app不一致では案内も投稿しない。
 
 ## 依存関係
 
@@ -80,3 +80,5 @@ Queue sliceでは、未知のCompany Authority envelopeをlegacy fallbackとし�
 実HTTP ingress selector sliceでは、`parseCompanyAuthorityRuntimeConfiguration`の結果を`companyAuthorityIngressConfiguration`へ渡し、有効なcapability mappingだけを`handleTenantSlackRequest.company_authority`へ接続した。live transport／authenticationは未定義のためclientは`not_collected`を返し、選択operationを`AUTHORITY_UNAVAILABLE`で停止する。無効設定では従来のlegacy経路を維持し、partial設定はhandler呼出し前に`CONFIGURATION_INVALID`で停止する。これはローカル配線と副作用0の証拠であり、本番設定、live resolution、Company Authority Queue成功、本番readbackの証拠ではない。
 
 外部連携ingress sliceでは、チャンネル所属者を権限主体として一括登録せず、Slack署名済みpayloadの`event.app_id`、workspace、channelを完全一致させるintegration tupleを追加した。tupleは既存の安定service subjectへ束縛し、Company Authorityの`auto`受理後だけ署名済みTenantContextとともに既存の議事録Queueへ送る。権限解決失敗はQueueへ送らず、選択済みintegrationに限って同一threadへ安全な保留案内をbest-effortで投稿する。送信元app不一致や署名不正ではCompany Authorityも通知も選択しない。本番deployと同一thread readbackは、この記述時点では`not_collected`である。
+
+Zapier実投稿のreadbackにより、`.txt`添付でもSlack event subtypeが`file_share`ではなく`bot_message`になることを確認した。Queue側の議事録分類は、入口で検証済みのintegration tupleを再利用し、完全一致する`bot_message`だけを許可する。未信頼のbot投稿、対象外チャンネル、`.txt`以外は従来どおり拒否する。本番deploy後の次回Zapier投稿による同一thread返信は別途readbackする。
