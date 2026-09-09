@@ -4671,6 +4671,9 @@ export default {
             send: (event) => env.TECHKNIGHT_EVENTS.send(event),
           },
         } : {}),
+        notify_authority_hold: ({ channel_id, thread_ts, event_id }) =>
+          new MeetingMinutesSlackClient(env.SLACK_BOT_TOKEN_UNSON)
+            .postAuthorityHold(channel_id, thread_ts, event_id),
         send: (event) => env.TECHKNIGHT_EVENTS.send(event),
       });
     } catch (error) {

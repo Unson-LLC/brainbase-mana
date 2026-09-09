@@ -1,6 +1,11 @@
 {
   "open_questions": [
     {
+      "id": "decision:trusted-slack-integration-identity",
+      "status": "resolved",
+      "reason": "外部連携はチャンネル参加者の自動登録ではなく、署名済みの受信app、workspace、channel、送信元appを完全一致させ、安定service subjectへ束縛する。人物操作の登録境界は維持する。"
+    },
+    {
       "id": "gap:discover",
       "status": "deferred",
       "reason": "Placement Profile is an internal execution-boundary enabler, not the user-discovery step; discovery belongs to a separate product Story."

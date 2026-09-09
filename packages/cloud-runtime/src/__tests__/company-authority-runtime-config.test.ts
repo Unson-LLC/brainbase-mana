@@ -204,6 +204,28 @@ describe("company authority runtime configuration", () => {
     }]);
   });
 
+  it("accepts a trusted Slack integration tuple without binding it to a message author", () => {
+    const configuration = parseCompanyAuthorityRuntimeConfiguration({
+      ...validEnv(),
+      MANA_COMPANY_AUTHORITY_SLACK_ROLLOUT_JSON: JSON.stringify([{
+        workspace_id: "T_UNSON",
+        channel_id: "C_ROUTER",
+        source_app_id: "A_ZAPIER",
+        authority_subject_id: "svc_meeting_router",
+      }]),
+    });
+
+    expect(configuration).toMatchObject({
+      state: "enabled",
+      slack_rollout: [{
+        workspace_id: "T_UNSON",
+        channel_id: "C_ROUTER",
+        source_app_id: "A_ZAPIER",
+        authority_subject_id: "svc_meeting_router",
+      }],
+    });
+  });
+
   it.each([
     "not-json",
     JSON.stringify(null),
@@ -212,6 +234,8 @@ describe("company authority runtime configuration", () => {
     JSON.stringify([{}]),
     JSON.stringify([{ workspace_id: "T_UNSON", channel_id: "C_ROUTER" }]),
     JSON.stringify([{ workspace_id: "T_UNSON", channel_id: "C_ROUTER", authenticated_subject_id: "U123", extra: "reject" }]),
+    JSON.stringify([{ workspace_id: "T_UNSON", channel_id: "C_ROUTER", source_app_id: "A_ZAPIER" }]),
+    JSON.stringify([{ workspace_id: "T_UNSON", channel_id: "C_ROUTER", source_app_id: "A_ZAPIER", authority_subject_id: "" }]),
     JSON.stringify([{ workspace_id: 123, channel_id: "C_ROUTER", authenticated_subject_id: "U123" }]),
     JSON.stringify([{ workspace_id: "*", channel_id: "C_ROUTER", authenticated_subject_id: "U123" }]),
     JSON.stringify([{ workspace_id: "T_UNSON*", channel_id: "C_ROUTER", authenticated_subject_id: "U123" }]),

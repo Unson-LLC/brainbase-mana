@@ -56,7 +56,8 @@ export async function resolvePersonalKnowledgeAuthority(
   if (config.state !== "enabled") return deny();
   if (config.desired_effect_by_capability[input.capability] !== input.effect) deny();
   if (config.slack_rollout && !config.slack_rollout.some(tuple =>
-    tuple.workspace_id === tenant.workspace_connection.workspace_id
+    "authenticated_subject_id" in tuple
+    && tuple.workspace_id === tenant.workspace_connection.workspace_id
     && tuple.channel_id === tenant.slack.channel_id
     && tuple.authenticated_subject_id === tenant.actor.authenticated_subject_id)) deny();
   const project = resolved.expected_scope.project_id;

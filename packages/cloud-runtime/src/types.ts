@@ -7,6 +7,8 @@ export interface SlackQueueEvent {
   threadTs: string;
   messageTs: string;
   userId?: string;
+  /** Slack app that authored the message. Distinct from the Events API receiver app. */
+  sourceAppId?: string;
   botId?: string;
   subtype?: string;
   eventType: string;

@@ -453,6 +453,16 @@ export class MeetingMinutesSlackClient {
         text: `:warning: *議事録の新規受付は一時停止中です*\n復旧後にファイルを投稿し直してください。\n問い合わせID: ${correlationId}` } }],
     });
   }
+  async postAuthorityHold(channelId: string, threadTs: string, eventId: string): Promise<void> {
+    await this.post("chat.postMessage", {
+      channel: channelId,
+      thread_ts: threadTs,
+      client_msg_id: await clientMessageId(`${eventId}-authority-hold`),
+      text: "受付しましたが、権限を確認できなかったため処理を保留しています。管理者が設定を確認します。",
+      blocks: [{ type: "section", text: { type: "mrkdwn",
+        text: ":warning: *受付しましたが、処理を保留しています*\n権限を確認できなかったため、管理者が設定を確認します。" } }],
+    });
+  }
   async postIntakePausedToUser(channelId: string, userId: string, threadTs: string, runId?: string): Promise<void> {
     const seed = runId?.trim() || `legacy-intake:${channelId}:${userId}`;
     const correlationId = deriveCorrelationId(seed, "intake", "INTAKE_PAUSED");
