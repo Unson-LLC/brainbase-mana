@@ -4,6 +4,7 @@ import {
   buildMeetingMinutesBackfillEvent,
   deriveMeetingMinutesBackfillEventId,
   isMeetingMinutesBackfillEvent,
+  meetingMinutesBackfillDispatchEventId,
   parseMeetingMinutesBackfillRequest,
   validateMeetingMinutesBackfillSource,
 } from "../meeting-minutes-backfill.js";
@@ -56,8 +57,15 @@ describe("meeting minutes backfill contract", () => {
   });
 
   it("marks only the derived backfill event for direct run identity", () => {
-    expect(isMeetingMinutesBackfillEvent({ eventId: deriveMeetingMinutesBackfillEventId(request) })).toBe(true);
+    const eventId = deriveMeetingMinutesBackfillEventId(request);
+    expect(isMeetingMinutesBackfillEvent({ eventId })).toBe(true);
     expect(isMeetingMinutesBackfillEvent({ eventId: "ordinary-event" })).toBe(false);
+    const dispatchEventId = meetingMinutesBackfillDispatchEventId({ eventId });
+    expect(dispatchEventId).toBe(eventId.replace("meeting_minutes_backfill_", "meeting_minutes_backfill_dispatch_"));
+    expect(dispatchEventId).not.toBe(eventId);
+    expect(isMeetingMinutesBackfillEvent({ eventId: dispatchEventId })).toBe(false);
+    expect(() => meetingMinutesBackfillDispatchEventId({ eventId: "ordinary-event" }))
+      .toThrow("meeting_minutes_backfill_event_invalid");
   });
 
   it("requires the exact parent channel, message, trusted source app, and txt file", () => {

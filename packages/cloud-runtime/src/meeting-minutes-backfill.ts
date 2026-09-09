@@ -122,6 +122,23 @@ export function isMeetingMinutesBackfillEvent(value: Pick<SlackQueueEvent, "even
   return /^meeting_minutes_backfill_[0-9a-f]{32}$/.test(value.eventId);
 }
 
+/**
+ * Give the queue envelope its own accounting identity. The exact backfill
+ * event id remains reserved for the one-file meeting-minutes run, so the
+ * outer delivery and inner run never contend for the same idempotency claim.
+ */
+export function meetingMinutesBackfillDispatchEventId(
+  value: Pick<SlackQueueEvent, "eventId">,
+): string {
+  if (!isMeetingMinutesBackfillEvent(value)) {
+    reject("meeting_minutes_backfill_event_invalid");
+  }
+  return value.eventId.replace(
+    MEETING_MINUTES_BACKFILL_EVENT_PREFIX,
+    "meeting_minutes_backfill_dispatch_",
+  );
+}
+
 function sourceFile(value: unknown): SlackFileReference | undefined {
   if (!isRecord(value)) return undefined;
   if (typeof value.id !== "string" || !SLACK_FILE_ID_PATTERN.test(value.id)

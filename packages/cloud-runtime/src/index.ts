@@ -97,6 +97,7 @@ import { MeetingMinutesSlackClient } from "./meeting-minutes-slack.js";
 import {
   deriveMeetingMinutesBackfillEventId,
   isMeetingMinutesBackfillEvent,
+  meetingMinutesBackfillDispatchEventId,
 } from "./meeting-minutes-backfill.js";
 import { handleMeetingMinutesBackfillAdminRequest } from "./meeting-minutes-backfill-entrypoints.js";
 import { resolveCrossWorkspaceMeetingMinutesSlackToken } from "./meeting-minutes-slack-routing.js";
@@ -5352,16 +5353,35 @@ export default {
           retry: (options) => message.retry(options),
         }, {
           ...tenantConsumerOptions,
-          process: async (event: SlackQueueEvent, tenantContext) => executeTenantRuntimeOperation({
-            tenant_context: tenantContext,
-            expected_scope: tenantConsumerOptions.expected_scope(tenantBody),
-            verifier,
-            quota: clients.quota,
-            accounting: clients.accounting,
-            ledger: createDurableTenantAccountingClient(env.TENANT_RUNTIME_STATE, tenantContext),
-            usage_unit: "model_tokens",
-            now: tenantConsumerOptions.now,
-            process: async () => {
+          process: async (event: SlackQueueEvent, tenantContext) => {
+            const operationEvent = isMeetingMinutesBackfillEvent(event)
+              ? { ...event, eventId: meetingMinutesBackfillDispatchEventId(event) }
+              : event;
+            const operationTenantContext = operationEvent === event
+              ? tenantContext
+              : await resolveDerivedSlackTenantContext(env, tenantContext, {
+                  app_id: tenantContext.workspace_connection.app_id,
+                  workspace_id: operationEvent.workspaceId,
+                  event_id: operationEvent.eventId,
+                  channel_id: operationEvent.channelId,
+                  thread_ts: operationEvent.threadTs,
+                  requester_id: operationEvent.userId ?? "",
+                }, undefined, () => tenantConfiguredDesiredEffectByCapability(env));
+            const operationBody: TenantQueueBody<SlackQueueEvent> = {
+              schema_version: "1.0",
+              tenant_context: operationTenantContext,
+              payload: operationEvent,
+            };
+            return executeTenantRuntimeOperation({
+              tenant_context: operationTenantContext,
+              expected_scope: tenantConsumerOptions.expected_scope(operationBody),
+              verifier,
+              quota: clients.quota,
+              accounting: clients.accounting,
+              ledger: createDurableTenantAccountingClient(env.TENANT_RUNTIME_STATE, operationTenantContext),
+              usage_unit: "model_tokens",
+              now: tenantConsumerOptions.now,
+              process: async () => {
               const expectedScope = tenantConsumerOptions.expected_scope(tenantBody);
               const intakeEffects = createMeetingMinutesTenantEffectGuard({
                 env,
@@ -5466,8 +5486,9 @@ export default {
                 });
               }
               return { outcome: "awaiting_destination" };
-            },
-          }),
+              },
+            });
+          },
         });
         continue;
       }
