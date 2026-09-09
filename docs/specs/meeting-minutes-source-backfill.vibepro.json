@@ -45,7 +45,7 @@
     {
       "id": "INV-002",
       "type": "invariant",
-      "statement": "管理バックフィルのキュー配送とファイル処理は議事録runと異なる決定的な冪等性IDを使い、consumer、配送処理、一件処理が同じclaimを競合させない",
+      "statement": "管理バックフィルのキュー配送とファイル処理は議事録runと異なる決定的な冪等性IDを使い、各transport payloadと署名contextのIDを一致させたまま、consumer、配送処理、一件処理が同じclaimを競合させない",
       "origin": {
         "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-2" }],
         "code_refs": [
@@ -54,7 +54,8 @@
         ],
         "test_refs": [
           { "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-backfill.test.ts", "case": "marks only the derived backfill event for direct run identity" },
-          { "file": "packages/cloud-runtime/src/__tests__/tenant-slack-runtime-wiring.test.ts", "case": "keeps backfill run identity separate from every Queue accounting claim" }
+          { "file": "packages/cloud-runtime/src/__tests__/tenant-slack-runtime-wiring.test.ts", "case": "keeps backfill run identity separate from every Queue accounting claim" },
+          { "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-pipeline.test.ts", "case": "keeps a stable run identity when the transport event uses a child accounting id" }
         ]
       },
       "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/*.test.ts", "must_cover": "backfill run identity separate" }] },

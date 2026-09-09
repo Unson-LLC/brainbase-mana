@@ -833,10 +833,9 @@ describe("会社別Cloudflare deployment", () => {
     expect(worker).toContain("tenant_context: operationTenantContext");
     expect(worker).toContain("expected_scope: tenantConsumerOptions.expected_scope(operationBody)");
     expect(worker).toContain("const childAccountingEventId = await childInteractionEventId(");
-    expect(worker).toContain("let childEventId = childAccountingEventId");
-    expect(worker).toContain("if (isMeetingMinutesBackfillEvent(event) && event.files?.length === 1)");
-    expect(worker).toContain("childEventId = event.eventId");
-    expect(worker).toContain("const runId = `${childEvent.eventId}_${file.id}`");
+    expect(worker).toContain("eventId: childAccountingEventId");
+    expect(worker).toContain("runEventId = isMeetingMinutesBackfillEvent(event) ? event.eventId : childEvent.eventId");
+    expect(worker).toContain("const runId = `${runEventId}_${file.id}`");
     expect(worker).toContain('"https://tenant-runtime.internal", undefined,');
     expect(worker).toContain("env.BRAINBASE_TENANT_RUNTIME_SERVICE?.fetch.bind(env.BRAINBASE_TENANT_RUNTIME_SERVICE)");
     expect(worker).toContain("destination.projectId === projectId");

@@ -92,7 +92,7 @@ export function isMeetingMinutesRedo(value: unknown): value is MeetingMinutesRed
 
 export async function processMeetingMinutesSlackEvent(fs: WorkspaceFs, event: SlackQueueEvent,
   config: MeetingMinutesRuntimeConfig, options: Pick<StartMeetingMinutesOptions,
-    "sourceAppId" | "download" | "classifyDestination" | "requestDestination" | "now">) {
+    "sourceAppId" | "download" | "classifyDestination" | "requestDestination" | "runEventId" | "now">) {
   if (!isMeetingMinutesSlackEvent(event, config)) return [];
   return startMeetingMinutesRuns(fs, event, { ...options, enabled: config.enabled, routerChannelId: config.routerChannelId,
     destinations: config.destinations });
