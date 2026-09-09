@@ -832,7 +832,8 @@ describe("会社別Cloudflare deployment", () => {
     expect(worker).toContain("meetingMinutesBackfillDispatchEventId(event)");
     expect(worker).toContain("tenant_context: operationTenantContext");
     expect(worker).toContain("expected_scope: tenantConsumerOptions.expected_scope(operationBody)");
-    expect(worker).toContain("let childEventId = await childInteractionEventId(event.eventId, `meeting-minutes-file:${file.id}`)");
+    expect(worker).toContain("const childAccountingEventId = await childInteractionEventId(");
+    expect(worker).toContain("let childEventId = childAccountingEventId");
     expect(worker).toContain("if (isMeetingMinutesBackfillEvent(event) && event.files?.length === 1)");
     expect(worker).toContain("childEventId = event.eventId");
     expect(worker).toContain("const runId = `${childEvent.eventId}_${file.id}`");
@@ -842,6 +843,7 @@ describe("会社別Cloudflare deployment", () => {
     expect(worker).toContain("destination.contextProjectCode === identity.project_code");
     expect(worker).toContain("tenantContext).resolve(identity, receiptId)");
     expect(worker).toContain("const childTenantContext = await resolveDerivedSlackTenantContext");
+    expect(worker).toContain("event_id: childAccountingEventId");
     expect(worker).toContain("tenant_context: childTenantContext");
     const ingestionStart = worker.indexOf(
       "if (isMeetingMinutesSlackEvent(tenantBody.payload, meetingMinutesConfig, trustedMeetingMinutesIntegration))",

@@ -124,6 +124,20 @@ describe("tenant Slack runtime wiring", () => {
     expect(queue).toContain('code: "FALLBACK_FORBIDDEN"');
   });
 
+  it("keeps backfill run identity separate from every Queue accounting claim", () => {
+    const queueStart = source.indexOf("async queue(");
+    const queue = source.slice(queueStart);
+    const childStart = queue.indexOf("const childAccountingEventId = await childInteractionEventId(");
+    const childEnd = queue.indexOf("await executeTenantRuntimeOperation({", childStart);
+    const child = queue.slice(childStart, childEnd);
+
+    expect(childStart).toBeGreaterThan(-1);
+    expect(child).toContain("let childEventId = childAccountingEventId");
+    expect(child).toContain("childEventId = event.eventId");
+    expect(child).toContain("event_id: childAccountingEventId");
+    expect(child).toContain("const childEvent: SlackQueueEvent = { ...event, eventId: childEventId");
+  });
+
   it("connects company-authority envelopes to the verified Queue consumer without legacy fallback", () => {
     const queueStart = source.indexOf("async queue(");
     const queue = source.slice(queueStart);
