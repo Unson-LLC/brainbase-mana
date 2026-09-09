@@ -5417,10 +5417,16 @@ export default {
               if (routerGate === "blocked") return { outcome: "awaiting_destination" };
               for (const file of event.files ?? []) {
                 if (!/\.txt$/i.test(file.name)) continue;
-                let childEventId = await childInteractionEventId(event.eventId, `meeting-minutes-file:${file.id}`);
+                const childAccountingEventId = await childInteractionEventId(
+                  event.eventId,
+                  `meeting-minutes-file:${file.id}`,
+                );
+                let childEventId = childAccountingEventId;
                 // A one-file admin backfill has already been verified and owns
                 // its stable run identity. Keep that identity through the
-                // worker instead of introducing another derived run key.
+                // worker instead of introducing another derived run key. Its
+                // accounting context still needs the child id because the
+                // Queue consumer already owns the source event id claim.
                 if (isMeetingMinutesBackfillEvent(event) && event.files?.length === 1) {
                   childEventId = event.eventId;
                 }
@@ -5428,7 +5434,7 @@ export default {
                 const childTenantContext = await resolveDerivedSlackTenantContext(env, tenantContext, {
                   app_id: tenantContext.workspace_connection.app_id,
                   workspace_id: childEvent.workspaceId,
-                  event_id: childEvent.eventId,
+                  event_id: childAccountingEventId,
                   channel_id: childEvent.channelId,
                   thread_ts: childEvent.threadTs,
                   requester_id: childEvent.userId ?? "",
