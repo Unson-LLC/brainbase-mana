@@ -229,7 +229,8 @@ describe("会社別Cloudflare deployment", () => {
     ]);
     expect(JSON.parse(unson.vars.RUNTIME_PLACEMENTS_JSON)).toEqual([
       { placementId: "mana-accounting", channelId: "C0BKS6RL99T", channelName: "9960-back-office", projectCodes: ["back-office"], taskWriteEnabled: true, taskBoardEnabled: true,
-        taskInventoryAllowedUserIds: ["U088D1HBY6L", "U0BKP8D3KPD"] },
+        taskInventoryAllowedUserIds: ["U088D1HBY6L", "U0BKP8D3KPD"],
+        capabilities: { mcp: ["google-drive"], gatewayTools: [] } },
       { placementId: "biz-meeting-router", channelId: "C0BKTFQ9V38", projectCodes: ["unson"], taskWriteEnabled: true },
       { placementId: "minutes-baao-growin", channelId: "C0BKTFU9YS2", projectCodes: ["baao"], taskBoardEnabled: true },
       { placementId: "minutes-zeims", channelId: "C0BKE4CM25V", projectCodes: ["zeims"], taskBoardEnabled: true },

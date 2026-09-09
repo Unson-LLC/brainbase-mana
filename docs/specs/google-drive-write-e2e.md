@@ -28,10 +28,15 @@ MCP server自身がOS temporary directory内に権限`0600`の一時ファイル
 
 ## Deployment contract
 
-本番MCP catalogが参照する`/home/ryoko/mcp/google-drive-server.js`は、deploy時に
-`/home/ryoko/current/packages/jimmy/dist/src/mcp/google-drive-server.js`へのsymlinkとして
-原子的に更新する。deployはbuild成果物の存在とsymlinkの解決先を確認してから成功とする。
-rollbackは`/home/ryoko/current`を前releaseへ戻すため、adapterも同時に戻る。
+Cloudflare runtimeはSlackチャンネルを`RUNTIME_PLACEMENTS_JSON`のplacementへ解決し、
+そのplacementの`capabilities.mcp`に`google-drive`が含まれる場合だけGoogle Drive MCPを
+Sandboxへ渡す。`9960-back-office`（`C0BKS6RL99T`）は会計業務でDriveを参照するため、
+`mana-accounting` placementにこの権限を明示する。
+
+Workerは`https://google-drive-mcp.internal/mcp`を内部proxyとして扱い、
+`GOOGLE_DRIVE_MCP_BASE_URL`とCloudflare secret `GOOGLE_DRIVE_MCP_TOKEN`を使って
+Brainbase側のGoogle Drive MCPへ転送する。tokenの正本はInfisicalの
+`GOOGLE_DRIVE_MCP_HTTP_BEARER_TOKEN`とし、本番反映時にwrapper経由でCloudflare secretへ投影する。
 
 ## Response and failure contract
 
