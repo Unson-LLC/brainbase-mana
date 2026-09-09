@@ -37,6 +37,8 @@ Workerは`https://google-drive-mcp.internal/mcp`を内部proxyとして扱い、
 `GOOGLE_DRIVE_MCP_BASE_URL`とCloudflare secret `GOOGLE_DRIVE_MCP_TOKEN`を使って
 Brainbase側のGoogle Drive MCPへ転送する。tokenの正本はInfisicalの
 `GOOGLE_DRIVE_MCP_HTTP_BEARER_TOKEN`とし、本番反映時にwrapper経由でCloudflare secretへ投影する。
+このtokenはMCPサーバー間のサービス認証であり、Slack workspace connectionの利用者credential leaseへ
+置き換えない。Company Authorityで受理済みの実行も、placementに`google-drive`がある場合は同じ内部proxyを使う。
 
 ## Response and failure contract
 
