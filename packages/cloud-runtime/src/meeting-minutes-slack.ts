@@ -401,13 +401,16 @@ export class MeetingMinutesSlackClient {
   async readSourceMessage(channelId: string, messageTs: string): Promise<MeetingMinutesBackfillSourceMessage> {
     if (!/^[A-Z0-9]{2,64}$/.test(channelId)) throw new Error("slack_source_channel_invalid");
     if (!/^\d{1,20}(?:\.\d{1,12})?$/.test(messageTs)) throw new Error("slack_source_message_invalid");
-    const result = await this.post("conversations.history", {
-      channel: channelId,
-      oldest: messageTs,
-      latest: messageTs,
-      inclusive: true,
-      limit: 1,
-    });
+    if (!this.token?.trim() && !this.brokered) throw new Error("slack_bot_token_not_configured");
+    const query = new URLSearchParams({ channel: channelId, ts: messageTs, limit: "1" });
+    const response = await this.fetchImpl.call(globalThis,
+      `https://slack.com/api/conversations.replies?${query.toString()}`, {
+        method: "GET", headers: this.authorization(),
+      });
+    const result = await response.json() as SlackApiResponse;
+    if (!response.ok || !result.ok) {
+      throw new Error(`slack_api_failed:conversations.replies:${result.error ?? response.status}`);
+    }
     const message = result.messages?.find((candidate) => candidate.ts === messageTs);
     if (!message) throw new Error("slack_source_message_not_found");
     if (message.channel !== undefined && message.channel !== channelId) {

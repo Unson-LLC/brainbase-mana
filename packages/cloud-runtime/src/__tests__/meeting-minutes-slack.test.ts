@@ -991,14 +991,11 @@ describe("MeetingMinutesSlackClient", () => {
       expect.objectContaining({ headers: { Authorization: "Bearer xoxb-token" } }));
   });
 
-  it("reads the exact source parent from Slack history", async () => {
+  it("reads the exact source parent through the broker-supported Slack replies operation", async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe("https://slack.com/api/conversations.history");
-      expect(init?.method).toBe("POST");
-      expect(JSON.parse(String(init?.body))).toEqual({
-        channel: "C1", oldest: "1788948593.030659", latest: "1788948593.030659",
-        inclusive: true, limit: 1,
-      });
+      expect(String(input)).toBe("https://slack.com/api/conversations.replies?channel=C1&ts=1788948593.030659&limit=1");
+      expect(init?.method).toBe("GET");
+      expect(init?.body).toBeUndefined();
       return Response.json({ ok: true, messages: [{
         channel: "C1", ts: "1788948593.030659", thread_ts: "1788948593.000001",
         app_id: "A_ZAPIER", subtype: "bot_message", text: "議事録テキスト",
