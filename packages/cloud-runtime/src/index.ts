@@ -3008,6 +3008,24 @@ function executeSharedReplyRuntime(input: SharedReplyRuntimeInput): Promise<Repl
   const actorIdentityResolver = canonicalPersonId === undefined
     ? resolveActorIdentityResolverFromEnv(env)
     : undefined;
+  const replyCapabilities = canonicalPersonId === undefined
+    ? placement.capabilities
+    : (() => {
+        const placementCapabilities = placement.capabilities ?? { mcp: [], gatewayTools: [] };
+        const personalKgGatewayEnabled = placementCapabilities.mcp.includes("gateway")
+          && placementCapabilities.gatewayTools.length > 0
+          && placementCapabilities.gatewayTools.every((tool) =>
+            tool === "search_personal_kg" || tool === "register_personal_kg");
+        return {
+          // Company Authority fixes the actor and project scope before this
+          // point. Keep placement-scoped provider MCPs available through the
+          // tenant-boundary proxy, while continuing to reject broad gateway
+          // capabilities that are not owner-scoped personal KG operations.
+          mcp: placementCapabilities.mcp.filter((name) => name !== "gateway")
+            .concat(personalKgGatewayEnabled ? ["gateway"] : []),
+          gatewayTools: personalKgGatewayEnabled ? placementCapabilities.gatewayTools : [],
+        };
+      })();
   return executeReplyRuntime({
     fs,
     event,
@@ -3132,14 +3150,7 @@ function executeSharedReplyRuntime(input: SharedReplyRuntimeInput): Promise<Repl
       runtimeContext: placement.runtimeContext
         ? { ...placement.runtimeContext, escalationEmployee: placement.agent?.escalationEmployee }
         : undefined,
-      capabilities: canonicalPersonId !== undefined
-        ? placement.capabilities?.mcp.includes("gateway")
-          && placement.capabilities.gatewayTools.length > 0
-          && placement.capabilities.gatewayTools.every((tool) =>
-            tool === "search_personal_kg" || tool === "register_personal_kg")
-          ? placement.capabilities
-          : { mcp: [], gatewayTools: [] }
-        : placement.capabilities,
+      capabilities: replyCapabilities,
       resolveActorIdentity: actorIdentityResolver,
       trace: { ...trace, model: claudeRuntime.model, effort: claudeRuntime.effort },
       respondPolicy: placement.respondTo,
