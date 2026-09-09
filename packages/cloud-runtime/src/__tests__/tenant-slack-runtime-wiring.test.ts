@@ -132,10 +132,10 @@ describe("tenant Slack runtime wiring", () => {
     const child = queue.slice(childStart, childEnd);
 
     expect(childStart).toBeGreaterThan(-1);
-    expect(child).toContain("let childEventId = childAccountingEventId");
-    expect(child).toContain("childEventId = event.eventId");
+    expect(child).toContain("eventId: childAccountingEventId");
     expect(child).toContain("event_id: childAccountingEventId");
-    expect(child).toContain("const childEvent: SlackQueueEvent = { ...event, eventId: childEventId");
+    expect(queue).toContain("runEventId = isMeetingMinutesBackfillEvent(event) ? event.eventId : childEvent.eventId");
+    expect(queue).toContain("runEventId,");
   });
 
   it("connects company-authority envelopes to the verified Queue consumer without legacy fallback", () => {

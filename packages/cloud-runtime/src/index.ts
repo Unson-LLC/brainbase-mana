@@ -5421,16 +5421,10 @@ export default {
                   event.eventId,
                   `meeting-minutes-file:${file.id}`,
                 );
-                let childEventId = childAccountingEventId;
-                // A one-file admin backfill has already been verified and owns
-                // its stable run identity. Keep that identity through the
-                // worker instead of introducing another derived run key. Its
-                // accounting context still needs the child id because the
-                // Queue consumer already owns the source event id claim.
-                if (isMeetingMinutesBackfillEvent(event) && event.files?.length === 1) {
-                  childEventId = event.eventId;
-                }
-                const childEvent: SlackQueueEvent = { ...event, eventId: childEventId, files: [file] };
+                // Transport payload and signed context must share the child
+                // accounting identity. Backfill keeps its stable business run
+                // identity separately when starting the durable run.
+                const childEvent: SlackQueueEvent = { ...event, eventId: childAccountingEventId, files: [file] };
                 const childTenantContext = await resolveDerivedSlackTenantContext(env, tenantContext, {
                   app_id: tenantContext.workspace_connection.app_id,
                   workspace_id: childEvent.workspaceId,
@@ -5467,7 +5461,8 @@ export default {
                           verifier,
                           now: tenantConsumerOptions.now,
                         });
-                    const runId = `${childEvent.eventId}_${file.id}`;
+                    const runEventId = isMeetingMinutesBackfillEvent(event) ? event.eventId : childEvent.eventId;
+                    const runId = `${runEventId}_${file.id}`;
                     const id = env.MEETING_MINUTES_WORKSPACE.idFromName(meetingMinutesWorkspaceName(
                       runtimeTenantId, event.workspaceId, runId,
                     ));
@@ -5481,6 +5476,7 @@ export default {
                       );
                       await processMeetingMinutesSlackEvent(workspace.fs, childEvent, meetingMinutesConfig, {
                         sourceAppId: childTenantContext.workspace_connection.app_id,
+                        runEventId,
                         download: (fileId) => meetingClients.slack.downloadTextFile(fileId),
                         classifyDestination: (transcript, destinations) => meetingClients.classify(transcript, destinations),
                         requestDestination: (run, destinations) => meetingClients.slack.requestDestination(run, destinations),

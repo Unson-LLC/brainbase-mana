@@ -20,6 +20,8 @@ import { classifyMeetingMinutesFailure, classifyMeetingMinutesRedoFailure, meeti
 export interface StartMeetingMinutesOptions {
   enabled: boolean; routerChannelId: string; sourceAppId: string;
   destinations: readonly MeetingMinutesDestination[]; now?: () => Date;
+  /** Stable business identity when transport/accounting uses a derived child event id. */
+  runEventId?: string;
   download?(fileId: string): Promise<string>;
   classifyDestination?(transcript: string, destinations: readonly MeetingMinutesDestination[]):
     Promise<{ destinationId: string; reason: string } | null>;
@@ -126,7 +128,8 @@ export async function startMeetingMinutesRuns(fs: WorkspaceFs, event: SlackQueue
   const files = (event.files ?? []).filter(isMeetingMinutesFile);
   const runs: MeetingMinutesRun[] = [];
   for (const file of files) {
-    const runId = meetingMinutesRunId(event.eventId, file.id); const existing = await loadMeetingMinutesRun(fs, runId);
+    const runEventId = options.runEventId ?? event.eventId;
+    const runId = meetingMinutesRunId(runEventId, file.id); const existing = await loadMeetingMinutesRun(fs, runId);
     if (existing) {
       if (!existing.slack?.selectionTs) {
         existing.slack ??= { postedChunkIndexes: [] };
@@ -135,7 +138,7 @@ export async function startMeetingMinutesRuns(fs: WorkspaceFs, event: SlackQueue
       }
       runs.push(existing); continue;
     }
-    const timestamp = now(options); const run: MeetingMinutesRun = { version: 1, runId, eventId: event.eventId,
+    const timestamp = now(options); const run: MeetingMinutesRun = { version: 1, runId, eventId: runEventId,
       workspaceId: event.workspaceId, sourceAppId: options.sourceAppId,
       sourceChannelId: event.channelId, sourceThreadTs: event.threadTs,
       sourceMessageTs: event.messageTs, file, status: "awaiting_destination", slack: { postedChunkIndexes: [] },

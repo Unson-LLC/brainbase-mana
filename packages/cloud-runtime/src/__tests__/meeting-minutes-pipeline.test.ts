@@ -394,6 +394,19 @@ describe("meeting minutes pipeline", () => {
     expect(second[0]?.runId).toBe("Ev1_F1"); expect(requestDestination).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a stable run identity when the transport event uses a child accounting id", async () => {
+    const fs = new MemoryFs();
+    const [run] = await startMeetingMinutesRuns(fs, { ...event, eventId: "Ev_transport" }, {
+      enabled: true, routerChannelId: "CROUTER", sourceAppId: "A1", destinations: [destination],
+      runEventId: "meeting_minutes_backfill_stable", requestDestination: vi.fn().mockResolvedValue("2.1"),
+    });
+    expect(run).toMatchObject({
+      runId: "meeting_minutes_backfill_stable_F1",
+      eventId: "meeting_minutes_backfill_stable",
+      status: "awaiting_destination",
+    });
+  });
+
   it("classifies once, persists the suggestion, and reuses it on event retry", async () => {
     const fs = new MemoryFs();
     const download = vi.fn().mockResolvedValue("SalesTailorの定例です");
