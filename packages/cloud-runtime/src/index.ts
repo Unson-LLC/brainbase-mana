@@ -8,7 +8,7 @@ import {
 } from "@cloudflare/computer";
 import { DurableObject } from "./multitenancy/cloudflare-worker-runtime.js";
 
-import { handleTenantSlackRequest } from "./slack.js";
+import { handleTenantSlackRequest, isTrustedIntegrationRollout } from "./slack.js";
 import { bootstrapUnsonSlackCredential } from "./tenant-credential-bootstrap.js";
 import { ackMalformedTenantQueueMessage } from "./queue-message-validation.js";
 import {
@@ -5151,7 +5151,19 @@ export default {
         continue;
       }
       const queuedTenantBody = message.body;
-      const queuedMeetingMinutesScope = isMeetingMinutesSlackEvent(queuedTenantBody.payload, meetingMinutesConfig)
+      const companyAuthorityRuntimeConfig = parseCompanyAuthorityRuntimeConfiguration(env);
+      const trustedMeetingMinutesIntegration = companyAuthorityRuntimeConfig.state === "enabled"
+        && isTrustedIntegrationRollout(
+          companyAuthorityRuntimeConfig.slack_rollout,
+          queuedTenantBody.payload.workspaceId,
+          queuedTenantBody.payload.channelId,
+          queuedTenantBody.payload.sourceAppId,
+        );
+      const queuedMeetingMinutesScope = isMeetingMinutesSlackEvent(
+        queuedTenantBody.payload,
+        meetingMinutesConfig,
+        trustedMeetingMinutesIntegration,
+      )
         ? expectedTenantQueueScope(env, queuedTenantBody)
         : undefined;
       const tenantBody = queuedMeetingMinutesScope
@@ -5177,7 +5189,7 @@ export default {
         log: (entry: Record<string, string>) => console.log(JSON.stringify(entry)),
         log_error: (entry: Record<string, string>) => console.error(JSON.stringify(entry)),
       };
-      if (isMeetingMinutesSlackEvent(tenantBody.payload, meetingMinutesConfig)) {
+      if (isMeetingMinutesSlackEvent(tenantBody.payload, meetingMinutesConfig, trustedMeetingMinutesIntegration)) {
         await consumeTenantQueueMessage({
           body: tenantBody,
           ack: () => message.ack(),

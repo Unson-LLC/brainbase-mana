@@ -824,7 +824,11 @@ describe("会社別Cloudflare deployment", () => {
     expect(worker).toContain("resolveSlackWorkerIngress({");
     expect(worker).toContain("meetingMinutesRecoveryEventId(recovery)");
     expect(worker).toContain('{ event: "meeting_minutes_recovery_failed", code: "FALLBACK_FORBIDDEN" }');
-    expect(worker).toContain("isMeetingMinutesSlackEvent(tenantBody.payload, meetingMinutesConfig)");
+    expect(worker).toContain("isTrustedIntegrationRollout(");
+    expect(worker).toContain("queuedTenantBody.payload.workspaceId");
+    expect(worker).toContain("queuedTenantBody.payload.channelId");
+    expect(worker).toContain("queuedTenantBody.payload.sourceAppId");
+    expect(worker).toContain("isMeetingMinutesSlackEvent(tenantBody.payload, meetingMinutesConfig, trustedMeetingMinutesIntegration)");
     expect(worker).toContain("const childEventId = await childInteractionEventId(event.eventId, `meeting-minutes-file:${file.id}`)");
     expect(worker).toContain("const runId = `${childEvent.eventId}_${file.id}`");
     expect(worker).toContain('"https://tenant-runtime.internal", undefined,');
@@ -834,7 +838,9 @@ describe("会社別Cloudflare deployment", () => {
     expect(worker).toContain("tenantContext).resolve(identity, receiptId)");
     expect(worker).toContain("const childTenantContext = await resolveDerivedSlackTenantContext");
     expect(worker).toContain("tenant_context: childTenantContext");
-    const ingestionStart = worker.indexOf("if (isMeetingMinutesSlackEvent(tenantBody.payload, meetingMinutesConfig))");
+    const ingestionStart = worker.indexOf(
+      "if (isMeetingMinutesSlackEvent(tenantBody.payload, meetingMinutesConfig, trustedMeetingMinutesIntegration))",
+    );
     const ingestionEnd = worker.indexOf("const ordinaryEvent = tenantBody.payload", ingestionStart);
     const ingestion = worker.slice(ingestionStart, ingestionEnd);
     expect(ingestion).not.toContain("withTenantCredentialLease({");

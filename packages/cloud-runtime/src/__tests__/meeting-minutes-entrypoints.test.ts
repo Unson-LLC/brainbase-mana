@@ -41,6 +41,16 @@ describe("meeting minutes entrypoints", () => {
       threadTs: "1", messageTs: "1", eventType: "message", subtype: "file_share", text: "", receivedAt: "now",
       files: [{ id: "F1", name: "meeting.txt" }] }, config)).toBe(false);
   });
+  it("classifies a bot-authored txt only after the integration tuple was trusted", () => {
+    const config = meetingMinutesRuntimeConfig({ MEETING_MINUTES_ENABLED: "true", MEETING_MINUTES_ROUTER_CHANNEL_ID: "CROUTER",
+      MEETING_MINUTES_DESTINATIONS_JSON: destinations, MEETING_MINUTES_OPERATOR_USER_IDS: "U1" });
+    const event = { tenantId: "unson", eventId: "E1", workspaceId: "T1", channelId: "CROUTER",
+      threadTs: "1", messageTs: "1", eventType: "message", subtype: "bot_message", sourceAppId: "A_ZAPIER",
+      botId: "B_ZAPIER", text: "test", receivedAt: "now", files: [{ id: "F1", name: "meeting.txt" }] };
+    expect(isMeetingMinutesSlackEvent(event, config)).toBe(false);
+    expect(isMeetingMinutesSlackEvent(event, config, true)).toBe(true);
+    expect(isMeetingMinutesSlackEvent({ ...event, files: [{ id: "F1", name: "meeting.pdf" }] }, config, true)).toBe(false);
+  });
   it("combines additional destinations and validates the complete set", () => {
     const additional = JSON.stringify([{ id: "extra", projectId: "extra", contextProjectCode: "mana",
       taskProjectCodes: ["mana"], taskBoardTargetId: "minutes-extra", name: "Extra",

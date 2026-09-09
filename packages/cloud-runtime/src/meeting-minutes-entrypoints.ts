@@ -41,13 +41,22 @@ export function meetingMinutesRuntimeConfig(env: MeetingMinutesEnvironment): Mee
   return { enabled, routerChannelId, destinations, operatorUserIds };
 }
 
-export function isMeetingMinutesSlackEvent(event: SlackQueueEvent, config: MeetingMinutesRuntimeConfig): boolean {
-  return config.enabled && isMeetingMinutesRouterFileEvent(event, config.routerChannelId);
+export function isMeetingMinutesSlackEvent(
+  event: SlackQueueEvent,
+  config: MeetingMinutesRuntimeConfig,
+  trustedIntegration = false,
+): boolean {
+  return config.enabled && isMeetingMinutesRouterFileEvent(event, config.routerChannelId, trustedIntegration);
 }
 
-export function isMeetingMinutesRouterFileEvent(event: SlackQueueEvent, routerChannelId: string): boolean {
+export function isMeetingMinutesRouterFileEvent(
+  event: SlackQueueEvent,
+  routerChannelId: string,
+  trustedIntegration = false,
+): boolean {
   return Boolean(routerChannelId) && event.channelId === routerChannelId && event.eventType === "message" &&
-    event.subtype === "file_share" && (event.files?.some((file) => /\.txt$/i.test(file.name)) ?? false);
+    (event.subtype === "file_share" || (trustedIntegration && event.subtype === "bot_message")) &&
+    (event.files?.some((file) => /\.txt$/i.test(file.name)) ?? false);
 }
 
 export function isMeetingMinutesSelection(value: unknown): value is MeetingMinutesSelection {
