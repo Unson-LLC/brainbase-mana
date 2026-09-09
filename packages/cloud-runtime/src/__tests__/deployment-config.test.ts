@@ -857,6 +857,7 @@ describe("会社別Cloudflare deployment", () => {
     expect(worker).toContain("tenantRuntimeClients(this.env, input.tenant_context,");
     expect(worker).not.toContain("const clients = tenantRuntimeClients(this.env);");
     expect(worker).toContain("processMeetingMinutesSlackEvent(");
+    expect(worker).toContain("trustedIntegration: isMeetingMinutesBackfillEvent(event)");
     expect(worker).toContain("issueTaskWriteRequestContext(");
     expect(worker).toMatch(
       /issueTaskWriteRequestContext\(\s*event,\s*env,\s*Date\.now\(\),\s*runtimePlacement,\s*requesterResolution\.personId,\s*\)/,

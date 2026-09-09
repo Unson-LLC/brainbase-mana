@@ -1,5 +1,6 @@
 import { currentMeetingMinutesActionTs, isMeetingMinutesRedo, isMeetingMinutesRouterFileEvent, isMeetingMinutesSelection, isMeetingMinutesSlackEvent,
-  meetingMinutesRuntimeConfig } from "../meeting-minutes-entrypoints.js";
+  meetingMinutesRuntimeConfig, processMeetingMinutesSlackEvent } from "../meeting-minutes-entrypoints.js";
+import { MemoryFs } from "./meeting-minutes-test-helpers.js";
 
 const destinations = JSON.stringify([{ id: "mana", projectId: "mana", contextProjectCode: "mana",
   taskProjectCodes: ["mana"], taskBoardTargetId: "minutes-mana", name: "mana",
@@ -50,6 +51,21 @@ describe("meeting minutes entrypoints", () => {
     expect(isMeetingMinutesSlackEvent(event, config)).toBe(false);
     expect(isMeetingMinutesSlackEvent(event, config, true)).toBe(true);
     expect(isMeetingMinutesSlackEvent({ ...event, files: [{ id: "F1", name: "meeting.pdf" }] }, config, true)).toBe(false);
+  });
+  it("starts a trusted bot-authored backfill instead of silently returning zero runs", async () => {
+    const config = meetingMinutesRuntimeConfig({ MEETING_MINUTES_ENABLED: "true", MEETING_MINUTES_ROUTER_CHANNEL_ID: "CROUTER",
+      MEETING_MINUTES_DESTINATIONS_JSON: destinations, MEETING_MINUTES_OPERATOR_USER_IDS: "U1" });
+    const event = { tenantId: "unson", eventId: "meeting_minutes_backfill_0123456789abcdef0123456789abcdef",
+      workspaceId: "T1", channelId: "CROUTER", threadTs: "1", messageTs: "1", eventType: "message",
+      subtype: "bot_message", sourceAppId: "A_ZAPIER", text: "test", receivedAt: "now",
+      files: [{ id: "F1", name: "meeting.txt", mimetype: "text/plain" }] };
+    const requestDestination = vi.fn().mockResolvedValue("2.1");
+    const runs = await processMeetingMinutesSlackEvent(new MemoryFs(), event, config, {
+      sourceAppId: "A_RECEIVER", trustedIntegration: true, requestDestination,
+    });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ runId: `${event.eventId}_F1`, status: "awaiting_destination" });
+    expect(requestDestination).toHaveBeenCalledOnce();
   });
   it("combines additional destinations and validates the complete set", () => {
     const additional = JSON.stringify([{ id: "extra", projectId: "extra", contextProjectCode: "mana",
