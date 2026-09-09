@@ -421,6 +421,7 @@ export class MeetingMinutesSlackClient {
       ts: message.ts,
       ...(typeof message.thread_ts === "string" ? { thread_ts: message.thread_ts } : {}),
       ...(typeof message.app_id === "string" ? { app_id: message.app_id } : {}),
+      ...(typeof message.user === "string" ? { user: message.user } : {}),
       ...(typeof message.bot_profile === "object" && message.bot_profile !== null
         ? { bot_profile: message.bot_profile } : {}),
       ...(typeof message.subtype === "string" ? { subtype: message.subtype } : {}),

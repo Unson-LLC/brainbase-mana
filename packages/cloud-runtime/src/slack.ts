@@ -133,6 +133,20 @@ export function isTrustedIntegrationRollout(
     && entry.source_app_id === sourceAppId) === true;
 }
 
+export function trustedIntegrationAuthoritySubject(
+  rollout: readonly CompanyAuthoritySlackRolloutTuple[] | undefined,
+  workspaceId: string,
+  channelId: string,
+  sourceAppId: string | undefined,
+): string | undefined {
+  if (sourceAppId === undefined) return undefined;
+  const entry = rollout?.find((candidate) => !("authenticated_subject_id" in candidate)
+    && candidate.workspace_id === workspaceId
+    && candidate.channel_id === channelId
+    && candidate.source_app_id === sourceAppId);
+  return entry && !("authenticated_subject_id" in entry) ? entry.authority_subject_id : undefined;
+}
+
 function normalizeSlackFiles(value: unknown): SlackFileReference[] | undefined {
   if (!Array.isArray(value)) return undefined;
   if (value.length > MAX_SLACK_FILES) throw new Error("slack_files_too_many");
