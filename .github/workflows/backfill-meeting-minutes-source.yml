@@ -49,7 +49,7 @@ jobs:
           response_file="$(mktemp)"
           trap 'rm -f "$response_file"' EXIT
           payload="$(jq -cn \
-            --arg tenantId 'unson-business' \
+            --arg tenantId 'ten_01M0HMA228ES64N4TFX846V8T8' \
             --arg workspaceId 'T0882T8N9UH' \
             --arg channelId 'C0BKTFQ9V38' \
             --arg messageTs "$MESSAGE_TS" \
