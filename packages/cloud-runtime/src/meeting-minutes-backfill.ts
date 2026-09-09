@@ -34,6 +34,7 @@ export interface MeetingMinutesBackfillSourceMessage {
   readonly ts?: unknown;
   readonly thread_ts?: unknown;
   readonly app_id?: unknown;
+  readonly user?: unknown;
   readonly bot_profile?: unknown;
   readonly subtype?: unknown;
   readonly text?: unknown;
@@ -142,13 +143,18 @@ function sourceFile(value: unknown): SlackFileReference | undefined {
 export function validateMeetingMinutesBackfillSource(
   request: MeetingMinutesBackfillRequest,
   parent: MeetingMinutesBackfillSourceMessage,
+  expectedSourceUserId?: string,
 ): { file: SlackFileReference; threadTs: string } {
   parseMeetingMinutesBackfillRequest(request);
   if (!isRecord(parent)) reject("meeting_minutes_backfill_source_invalid");
   if (parent.channel !== request.channelId) reject("meeting_minutes_backfill_channel_mismatch");
   if (parent.ts !== request.messageTs) reject("meeting_minutes_backfill_message_mismatch");
   const botProfileAppId = isRecord(parent.bot_profile) ? parent.bot_profile.app_id : undefined;
-  if (parent.app_id !== request.sourceAppId && botProfileAppId !== request.sourceAppId) {
+  const trustedAuthoritySubject = expectedSourceUserId !== undefined
+    && SLACK_ID_PATTERN.test(expectedSourceUserId)
+    && parent.user === expectedSourceUserId;
+  if (parent.app_id !== request.sourceAppId && botProfileAppId !== request.sourceAppId
+    && !trustedAuthoritySubject) {
     reject("meeting_minutes_backfill_source_app_mismatch");
   }
 
@@ -177,6 +183,7 @@ export interface MeetingMinutesBackfillEventOptions {
   readonly tenantId: string;
   readonly userId: string;
   readonly receivedAt: string;
+  readonly expectedSourceUserId?: string;
 }
 
 /** Convert a verified source observation into the existing Slack queue contract. */
@@ -193,7 +200,7 @@ export function buildMeetingMinutesBackfillEvent(
   if (typeof options.receivedAt !== "string" || !options.receivedAt.trim()) {
     reject("meeting_minutes_backfill_received_at_invalid");
   }
-  const checked = validateMeetingMinutesBackfillSource(parsed, parent);
+  const checked = validateMeetingMinutesBackfillSource(parsed, parent, options.expectedSourceUserId);
   const subtype = parent.subtype === "file_share" ? "file_share" : "bot_message";
   return {
     tenantId: parsed.tenantId,

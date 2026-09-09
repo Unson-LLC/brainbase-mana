@@ -8,7 +8,8 @@ import {
 } from "@cloudflare/computer";
 import { DurableObject } from "./multitenancy/cloudflare-worker-runtime.js";
 
-import { handleTenantSlackRequest, isTrustedIntegrationRollout } from "./slack.js";
+import { handleTenantSlackRequest, isTrustedIntegrationRollout,
+  trustedIntegrationAuthoritySubject } from "./slack.js";
 import { bootstrapUnsonSlackCredential } from "./tenant-credential-bootstrap.js";
 import { ackMalformedTenantQueueMessage } from "./queue-message-validation.js";
 import {
@@ -3638,6 +3639,10 @@ export default {
             input.sourceAppId,
           ),
         requesterId,
+        sourceUserId: (input) => companyAuthorityConfiguration.state === "enabled"
+          ? trustedIntegrationAuthoritySubject(companyAuthorityConfiguration.slack_rollout,
+            input.workspaceId, input.channelId, input.sourceAppId)
+          : undefined,
         readSourceMessage: async (input) => {
           if (!sourceTenantContext) deny("worker_ingress", "TENANT_CONTEXT_MISSING");
           const eventId = deriveMeetingMinutesBackfillEventId(input);

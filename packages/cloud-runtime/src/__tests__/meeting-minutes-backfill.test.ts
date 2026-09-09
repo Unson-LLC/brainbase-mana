@@ -79,6 +79,15 @@ describe("meeting minutes backfill contract", () => {
     });
   });
 
+  it("accepts the exact Company Authority subject when Slack omits the legacy app identity", () => {
+    const legacyParent = { ...parent, app_id: undefined, user: "U0BL94R9UJE" };
+    expect(validateMeetingMinutesBackfillSource(request, legacyParent, "U0BL94R9UJE")).toEqual({
+      file: parent.files[0], threadTs: parent.thread_ts,
+    });
+    expect(() => validateMeetingMinutesBackfillSource(request, legacyParent, "U_OTHER"))
+      .toThrow("source_app_mismatch");
+  });
+
   it("builds the queue event with the stable id and only the requested file", () => {
     const event = buildMeetingMinutesBackfillEvent(request, parent, {
       tenantId: request.tenantId,

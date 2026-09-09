@@ -28,6 +28,8 @@ export interface MeetingMinutesBackfillAdminDependencies {
   isTrustedSource(request: MeetingMinutesBackfillRequest): boolean | Promise<boolean>;
   /** Authenticated operator identity copied into the derived queue envelope. */
   requesterId: string | ((request: MeetingMinutesBackfillRequest) => string);
+  /** Exact integration subject from Company Authority, used when Slack omits app identity. */
+  sourceUserId?: string | ((request: MeetingMinutesBackfillRequest) => string | undefined);
   readSourceMessage(request: MeetingMinutesBackfillRequest): Promise<MeetingMinutesBackfillSourceMessage>;
   /** Existing queue producer. The stable event id is derived before this callback. */
   enqueue(event: SlackQueueEvent): Promise<void>;
@@ -108,6 +110,9 @@ export async function handleMeetingMinutesBackfillAdminRequest(
         ? dependencies.requesterId(input)
         : dependencies.requesterId,
       receivedAt: dependencies.now?.() ?? new Date().toISOString(),
+      expectedSourceUserId: typeof dependencies.sourceUserId === "function"
+        ? dependencies.sourceUserId(input)
+        : dependencies.sourceUserId,
     });
   } catch (error) {
     if (isSourceValidationError(error)) {
