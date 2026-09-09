@@ -5477,6 +5477,7 @@ export default {
                       await processMeetingMinutesSlackEvent(workspace.fs, childEvent, meetingMinutesConfig, {
                         sourceAppId: childTenantContext.workspace_connection.app_id,
                         runEventId,
+                        trustedIntegration: isMeetingMinutesBackfillEvent(event),
                         download: (fileId) => meetingClients.slack.downloadTextFile(fileId),
                         classifyDestination: (transcript, destinations) => meetingClients.classify(transcript, destinations),
                         requestDestination: (run, destinations) => meetingClients.slack.requestDestination(run, destinations),

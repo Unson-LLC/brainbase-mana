@@ -60,6 +60,21 @@
       },
       "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/*.test.ts", "must_cover": "backfill run identity separate" }] },
       "confidence": 0.99
+    },
+    {
+      "id": "C-003",
+      "type": "contract",
+      "statement": "Slack履歴で信頼済みと再確認したbot_messageのバックフィルは、通常入口へ信頼済み連携として明示的に渡し、対象0件として黙って終了させず議事録runと保存先選択返信を作成する",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-3" }],
+        "code_refs": [
+          { "file": "packages/cloud-runtime/src/index.ts" },
+          { "file": "packages/cloud-runtime/src/meeting-minutes-entrypoints.ts" }
+        ],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-entrypoints.test.ts", "case": "starts a trusted bot-authored backfill instead of silently returning zero runs" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-entrypoints.test.ts", "must_cover": "silently returning zero runs" }] },
+      "confidence": 0.99
     }
   ]
 }
