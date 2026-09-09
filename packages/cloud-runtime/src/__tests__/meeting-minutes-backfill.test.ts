@@ -96,11 +96,12 @@ describe("meeting minutes backfill contract", () => {
   it("authorizes, validates, and enqueues a backfill once while reusing a persisted run", async () => {
     let savedRun: { runId: string; status: "awaiting_destination"; slack: { selectionTs: string; postedChunkIndexes: number[] } } | undefined;
     const enqueue = vi.fn().mockResolvedValue(undefined);
+    const requesterId = vi.fn().mockReturnValue("UADMIN");
     const dependencies = {
       authorize: vi.fn().mockResolvedValue(true),
       isTenantScope: vi.fn().mockReturnValue(true),
       isTrustedSource: vi.fn().mockReturnValue(true),
-      requesterId: "UADMIN",
+      requesterId,
       readSourceMessage: vi.fn().mockResolvedValue(parent),
       findRun: vi.fn(async () => savedRun),
       enqueue,
@@ -121,6 +122,7 @@ describe("meeting minutes backfill contract", () => {
       created: true,
     });
     expect(enqueue).toHaveBeenCalledOnce();
+    expect(requesterId).toHaveBeenCalledWith(request);
     const queuedEvent = enqueue.mock.calls[0]?.[0];
     savedRun = { runId: expectedRunId, status: "awaiting_destination", slack: {
       selectionTs: "1788948600.000001", postedChunkIndexes: [],

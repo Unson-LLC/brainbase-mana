@@ -3593,23 +3593,43 @@ export default {
       } catch {
         return Response.json({ error: "company_authority_config_invalid" }, { status: 503 });
       }
-      const boundary = await resolveDurableTenantBoundaryContext(
-        env.TENANT_RUNTIME_STATE, request, ["brainbase_proxy"], new Date().toISOString(),
-      );
-      if (boundary instanceof Response) return boundary;
-      const sourceTenantContext = boundary.tenant_context;
-      const requesterId = sourceTenantContext.actor.authenticated_subject_id;
-      const receiverAppId = sourceTenantContext.workspace_connection.app_id;
+      let sourceTenantContext: TenantContextEnvelope | undefined;
+      const requesterId = [...meetingMinutesConfig.operatorUserIds][0];
+      if (!requesterId) {
+        return Response.json({ error: "meeting_minutes_operator_missing" }, { status: 503 });
+      }
+      const receiverAppId = requiredRuntimeBinding(env.SLACK_EXPECTED_APP_ID);
       const desiredEffectByCapability = companyAuthorityConfiguration.state === "enabled"
         ? companyAuthorityConfiguration.desired_effect_by_capability
         : undefined;
       const now = () => new Date().toISOString();
       return handleMeetingMinutesBackfillAdminRequest(request, {
         authorize: async () => true,
-        isTenantScope: (input) => input.tenantId === sourceTenantContext.tenant.tenant_id
-          && input.workspaceId === sourceTenantContext.workspace_connection.workspace_id
-          && input.channelId === meetingMinutesConfig.routerChannelId
-          && input.channelId === sourceTenantContext.slack.channel_id,
+        isTenantScope: async (input) => {
+          if (input.channelId !== meetingMinutesConfig.routerChannelId) return false;
+          const identity: TenantInteractionIdentity = {
+            app_id: receiverAppId,
+            workspace_id: input.workspaceId,
+            event_id: deriveMeetingMinutesBackfillEventId(input),
+            channel_id: input.channelId,
+            thread_ts: input.messageTs,
+            requester_id: requesterId,
+          };
+          const clients = tenantRuntimeClients(env, undefined, desiredEffectByCapability);
+          const resolved = await resolveSlackWorkerIngress({
+            identity: { provider: "slack", ...identity },
+            required_scopes: requiredRuntimeBinding(env.MANA_REQUIRED_SLACK_SCOPES)
+              .split(",").map((value) => value.trim()).filter(Boolean),
+            ...placementAuthorizationForIdentity(env, identity),
+            authority: clients.authority,
+            now: now(),
+            resolve_verification_key: (keyId) => resolveTenantVerificationKey(env, keyId),
+          });
+          sourceTenantContext = resolved.tenant_context;
+          return input.tenantId === sourceTenantContext.tenant.tenant_id
+            && input.workspaceId === sourceTenantContext.workspace_connection.workspace_id
+            && input.channelId === sourceTenantContext.slack.channel_id;
+        },
         isTrustedSource: (input) => companyAuthorityConfiguration.state === "enabled"
           && isTrustedIntegrationRollout(
             companyAuthorityConfiguration.slack_rollout,
@@ -3619,6 +3639,7 @@ export default {
           ),
         requesterId,
         readSourceMessage: async (input) => {
+          if (!sourceTenantContext) deny("worker_ingress", "TENANT_CONTEXT_MISSING");
           const eventId = deriveMeetingMinutesBackfillEventId(input);
           const event: SlackQueueEvent = {
             tenantId: input.tenantId,
@@ -3666,6 +3687,7 @@ export default {
           ).readSourceMessage(input.channelId, input.messageTs));
         },
         enqueue: async (event) => {
+          if (!sourceTenantContext) deny("worker_ingress", "TENANT_CONTEXT_MISSING");
           const tenantContext = await resolveDerivedSlackTenantContext(env, sourceTenantContext, {
             app_id: receiverAppId,
             workspace_id: event.workspaceId,
@@ -3685,6 +3707,7 @@ export default {
           await env.TECHKNIGHT_EVENTS.send(body);
         },
         findRun: async (runId) => {
+          if (!sourceTenantContext) deny("worker_ingress", "TENANT_CONTEXT_MISSING");
           const id = env.MEETING_MINUTES_WORKSPACE.idFromName(meetingMinutesWorkspaceName(
             sourceTenantContext.tenant.tenant_id,
             sourceTenantContext.workspace_connection.workspace_id,
