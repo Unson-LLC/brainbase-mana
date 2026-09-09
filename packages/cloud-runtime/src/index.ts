@@ -93,6 +93,11 @@ import {
 import { createTaskWriteProxyHandler } from "./task-write-proxy.js";
 import { peekTaskWriteApproval } from "./task-write-approval.js";
 import { MeetingMinutesSlackClient } from "./meeting-minutes-slack.js";
+import {
+  deriveMeetingMinutesBackfillEventId,
+  isMeetingMinutesBackfillEvent,
+} from "./meeting-minutes-backfill.js";
+import { handleMeetingMinutesBackfillAdminRequest } from "./meeting-minutes-backfill-entrypoints.js";
 import { resolveCrossWorkspaceMeetingMinutesSlackToken } from "./meeting-minutes-slack-routing.js";
 import { CloudflareMeetingMinutesGitHubClient } from "./meeting-minutes-github.js";
 import { classifyMeetingMinutesDestinationInSandbox,
@@ -3569,6 +3574,129 @@ export default {
       }
       return bootstrapUnsonSlackCredential(request, env);
     }
+    if (request.method === "POST" && url.pathname === "/admin/meeting-minutes/backfill") {
+      if (!(await isSandboxAdminAuthorized(request, env.SANDBOX_PROBE_TOKEN))) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      let meetingMinutesConfig;
+      try {
+        meetingMinutesConfig = meetingMinutesRuntimeConfig(env);
+      } catch {
+        return Response.json({ error: "meeting_minutes_config_invalid" }, { status: 503 });
+      }
+      if (!meetingMinutesConfig.enabled) {
+        return Response.json({ error: "meeting_minutes_disabled" }, { status: 503 });
+      }
+      let companyAuthorityConfiguration;
+      try {
+        companyAuthorityConfiguration = parseCompanyAuthorityRuntimeConfiguration(env);
+      } catch {
+        return Response.json({ error: "company_authority_config_invalid" }, { status: 503 });
+      }
+      const boundary = await resolveDurableTenantBoundaryContext(
+        env.TENANT_RUNTIME_STATE, request, ["brainbase_proxy"], new Date().toISOString(),
+      );
+      if (boundary instanceof Response) return boundary;
+      const sourceTenantContext = boundary.tenant_context;
+      const requesterId = sourceTenantContext.actor.authenticated_subject_id;
+      const receiverAppId = sourceTenantContext.workspace_connection.app_id;
+      const desiredEffectByCapability = companyAuthorityConfiguration.state === "enabled"
+        ? companyAuthorityConfiguration.desired_effect_by_capability
+        : undefined;
+      const now = () => new Date().toISOString();
+      return handleMeetingMinutesBackfillAdminRequest(request, {
+        authorize: async () => true,
+        isTenantScope: (input) => input.tenantId === sourceTenantContext.tenant.tenant_id
+          && input.workspaceId === sourceTenantContext.workspace_connection.workspace_id
+          && input.channelId === meetingMinutesConfig.routerChannelId
+          && input.channelId === sourceTenantContext.slack.channel_id,
+        isTrustedSource: (input) => companyAuthorityConfiguration.state === "enabled"
+          && isTrustedIntegrationRollout(
+            companyAuthorityConfiguration.slack_rollout,
+            input.workspaceId,
+            input.channelId,
+            input.sourceAppId,
+          ),
+        requesterId,
+        readSourceMessage: async (input) => {
+          const eventId = deriveMeetingMinutesBackfillEventId(input);
+          const event: SlackQueueEvent = {
+            tenantId: input.tenantId,
+            eventId,
+            workspaceId: input.workspaceId,
+            channelId: input.channelId,
+            threadTs: input.messageTs,
+            messageTs: input.messageTs,
+            userId: requesterId,
+            sourceAppId: input.sourceAppId,
+            subtype: "bot_message",
+            eventType: "message",
+            text: "",
+            receivedAt: now(),
+            files: [{ id: input.fileId, name: "source.txt" }],
+          };
+          const tenantContext = await resolveDerivedSlackTenantContext(env, sourceTenantContext, {
+            app_id: receiverAppId,
+            workspace_id: input.workspaceId,
+            event_id: eventId,
+            channel_id: input.channelId,
+            thread_ts: input.messageTs,
+            requester_id: requesterId,
+          }, undefined, desiredEffectByCapability);
+          const body: TenantQueueBody<SlackQueueEvent> = {
+            schema_version: "1.0",
+            tenant_context: tenantContext,
+            payload: event,
+          };
+          const expectedScope = expectedTenantQueueScope(env, body);
+          const clients = tenantRuntimeClients(env, tenantContext, desiredEffectByCapability);
+          const verifier = new TenantRuntimeBoundaryVerifier({
+            read_authoritative_snapshot: (connectionId) => clients.authority.read_workspace_connection(connectionId),
+            resolve_verification_key: (keyId) => resolveTenantVerificationKey(env, keyId),
+          });
+          return createMeetingMinutesTenantEffectGuard({
+            env,
+            tenant_context: tenantContext,
+            expected_scope: expectedScope,
+            verifier,
+            now,
+          }).boundary("slack_delivery", (credentialFetch) => new MeetingMinutesSlackClient(
+            undefined,
+            credentialFetch,
+          ).readSourceMessage(input.channelId, input.messageTs));
+        },
+        enqueue: async (event) => {
+          const tenantContext = await resolveDerivedSlackTenantContext(env, sourceTenantContext, {
+            app_id: receiverAppId,
+            workspace_id: event.workspaceId,
+            event_id: event.eventId,
+            channel_id: event.channelId,
+            thread_ts: event.threadTs,
+            requester_id: event.userId ?? requesterId,
+          }, undefined, desiredEffectByCapability);
+          const body: TenantQueueBody<SlackQueueEvent> = {
+            schema_version: "1.0",
+            tenant_context: tenantContext,
+            payload: event,
+          };
+          // Validate the exact payload/envelope binding before handing it to
+          // the queue; queue-consumer checks remain the second fence.
+          expectedTenantQueueScope(env, body);
+          await env.TECHKNIGHT_EVENTS.send(body);
+        },
+        findRun: async (runId) => {
+          const id = env.MEETING_MINUTES_WORKSPACE.idFromName(meetingMinutesWorkspaceName(
+            sourceTenantContext.tenant.tenant_id,
+            sourceTenantContext.workspace_connection.workspace_id,
+            runId,
+          ));
+          const handle = env.MEETING_MINUTES_WORKSPACE.get(id) as unknown as WorkspaceHandle;
+          return withDisposableResource(() => getWorkspace(handle),
+            (workspace) => loadMeetingMinutesRun(workspace.fs, runId));
+        },
+        now,
+      });
+    }
     if (request.method === "POST" && url.pathname === "/admin/meeting-minutes/intake") {
       if (!(await isSandboxAdminAuthorized(request, env.SANDBOX_PROBE_TOKEN))) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
@@ -5241,7 +5369,13 @@ export default {
               if (routerGate === "blocked") return { outcome: "awaiting_destination" };
               for (const file of event.files ?? []) {
                 if (!/\.txt$/i.test(file.name)) continue;
-                const childEventId = await childInteractionEventId(event.eventId, `meeting-minutes-file:${file.id}`);
+                let childEventId = await childInteractionEventId(event.eventId, `meeting-minutes-file:${file.id}`);
+                // A one-file admin backfill has already been verified and owns
+                // its stable run identity. Keep that identity through the
+                // worker instead of introducing another derived run key.
+                if (isMeetingMinutesBackfillEvent(event) && event.files?.length === 1) {
+                  childEventId = event.eventId;
+                }
                 const childEvent: SlackQueueEvent = { ...event, eventId: childEventId, files: [file] };
                 const childTenantContext = await resolveDerivedSlackTenantContext(env, tenantContext, {
                   app_id: tenantContext.workspace_connection.app_id,

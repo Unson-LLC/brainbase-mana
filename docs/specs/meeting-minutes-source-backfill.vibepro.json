@@ -1,0 +1,46 @@
+{
+  "schema_version": "0.1.0",
+  "story_id": "meeting-minutes-source-backfill",
+  "generated_by": { "caller": "codex", "stage": "implementation" },
+  "clauses": [
+    {
+      "id": "C-001",
+      "type": "contract",
+      "statement": "管理バックフィルは完全一致のtenant、workspace、channel、元投稿ts、file ID、送信元app IDだけを受け付け、Slack履歴で同じ原稿を再確認する",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-1" }],
+        "code_refs": [{ "file": "packages/cloud-runtime/src/meeting-minutes-backfill.ts" }],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-backfill.test.ts", "case": "requires the exact parent channel, message, trusted source app, and txt file" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-backfill.test.ts", "must_cover": "exact parent" }] },
+      "confidence": 0.99
+    },
+    {
+      "id": "INV-001",
+      "type": "invariant",
+      "statement": "同じ元投稿の処理IDは決定的で、保存済みの選択投稿がある再投入では新しいSlack返信を作らない",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-2" }],
+        "code_refs": [
+          { "file": "packages/cloud-runtime/src/meeting-minutes-backfill.ts" },
+          { "file": "packages/cloud-runtime/src/meeting-minutes-backfill-entrypoints.ts" }
+        ],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-backfill.test.ts", "case": "authorizes, validates, and enqueues a backfill once while reusing a persisted run" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-backfill.test.ts", "must_cover": "reusing a persisted run" }] },
+      "confidence": 0.99
+    },
+    {
+      "id": "C-002",
+      "type": "contract",
+      "statement": "管理APIは既存の管理認証、tenant境界、信頼済み送信元組合せを通過した場合だけ既存キューへ投入する",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-3" }],
+        "code_refs": [{ "file": "packages/cloud-runtime/src/index.ts" }],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-backfill.test.ts", "case": "rejects an untrusted source before reading Slack or enqueueing" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-backfill.test.ts", "must_cover": "untrusted source" }] },
+      "confidence": 0.99
+    }
+  ]
+}
