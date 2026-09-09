@@ -998,7 +998,7 @@ describe("MeetingMinutesSlackClient", () => {
       expect(init?.body).toBeUndefined();
       return Response.json({ ok: true, messages: [{
         channel: "C1", ts: "1788948593.030659", thread_ts: "1788948593.000001",
-        app_id: "A_ZAPIER", subtype: "bot_message", text: "議事録テキスト",
+        bot_profile: { app_id: "A_ZAPIER" }, subtype: "bot_message", text: "議事録テキスト",
         files: [{ id: "F1", name: "meeting.txt", mimetype: "text/plain", size: 12 }],
       }] });
     }) as typeof fetch;
@@ -1006,7 +1006,7 @@ describe("MeetingMinutesSlackClient", () => {
     await expect(new MeetingMinutesSlackClient("xoxb-token", fetchImpl).readSourceMessage(
       "C1", "1788948593.030659",
     )).resolves.toMatchObject({
-      channel: "C1", ts: "1788948593.030659", app_id: "A_ZAPIER", files: [{ id: "F1" }],
+      channel: "C1", ts: "1788948593.030659", bot_profile: { app_id: "A_ZAPIER" }, files: [{ id: "F1" }],
     });
   });
 
