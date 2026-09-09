@@ -915,6 +915,28 @@ describe("Company Authority runtime.execute reply executor", () => {
     });
   });
 
+  it("preserves placement-scoped provider MCPs for an accepted canonical person", async () => {
+    const env = runtimeEnv();
+    const placements = JSON.parse(env.RUNTIME_PLACEMENTS_JSON!);
+    placements[0].capabilities = {
+      mcp: ["google-drive", "gateway"],
+      gatewayTools: ["send_message"],
+    };
+    env.RUNTIME_PLACEMENTS_JSON = JSON.stringify(placements);
+
+    await expect(executeCompanyAuthorityReplyOperation(env, operation())).resolves.toMatchObject({
+      applied: true,
+      response_observed: true,
+    });
+
+    expect(runtimeMocks.replyInputs[0]?.options).toMatchObject({
+      capabilities: {
+        mcp: ["google-drive"],
+        gatewayTools: [],
+      },
+    });
+  });
+
   it("uses the refreshed tenant context for broker, Slack delivery, and readback", async () => {
     const candidate = operation();
     const refreshedExpiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
