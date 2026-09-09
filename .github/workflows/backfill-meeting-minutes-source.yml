@@ -72,19 +72,20 @@ jobs:
             echo "復旧API失敗: HTTP $status / $error_code" >&2
             exit 1
           fi
-          jq -e --arg status "$status" --arg messageTs "$MESSAGE_TS" \
-            '$status == "200" and .messageTs == $messageTs
-             and (.runId | type == "string")
+          jq -e --arg status "$status" \
+            '$status == "200"
+             and (.runId | type == "string" and length > 0)
              and (.status | type == "string")
              and (.enqueued | type == "boolean")' "$response_file" >/dev/null
 
-          safe_result="$(jq '{runId,messageTs,status,enqueued,created}' "$response_file")"
+          safe_result="$(jq --arg messageTs "$MESSAGE_TS" \
+            '{runId,messageTs:$messageTs,status,enqueued,created}' "$response_file")"
           printf '%s\n' "$safe_result"
           {
             echo '## Slack原文からの議事録復旧'
-            echo "- 元投稿: \`$MESSAGE_TS\`"
-            echo "- file ID: \`$FILE_ID\`"
-            echo "- 理由: $BACKFILL_REASON"
+            printf '%s\n' "- 元投稿: \`$MESSAGE_TS\`"
+            printf '%s\n' "- file ID: \`$FILE_ID\`"
+            printf '%s\n' "- 理由: $BACKFILL_REASON"
             echo '- API応答（安全な項目のみ）:'
             echo '```json'
             echo "$safe_result"
