@@ -34,6 +34,7 @@ export interface MeetingMinutesBackfillSourceMessage {
   readonly ts?: unknown;
   readonly thread_ts?: unknown;
   readonly app_id?: unknown;
+  readonly bot_profile?: unknown;
   readonly subtype?: unknown;
   readonly text?: unknown;
   readonly files?: unknown;
@@ -146,7 +147,10 @@ export function validateMeetingMinutesBackfillSource(
   if (!isRecord(parent)) reject("meeting_minutes_backfill_source_invalid");
   if (parent.channel !== request.channelId) reject("meeting_minutes_backfill_channel_mismatch");
   if (parent.ts !== request.messageTs) reject("meeting_minutes_backfill_message_mismatch");
-  if (parent.app_id !== request.sourceAppId) reject("meeting_minutes_backfill_source_app_mismatch");
+  const botProfileAppId = isRecord(parent.bot_profile) ? parent.bot_profile.app_id : undefined;
+  if (parent.app_id !== request.sourceAppId && botProfileAppId !== request.sourceAppId) {
+    reject("meeting_minutes_backfill_source_app_mismatch");
+  }
 
   if (!Array.isArray(parent.files)) reject("meeting_minutes_backfill_file_missing");
   const matching = parent.files.filter((candidate) => isRecord(candidate) && candidate.id === request.fileId);

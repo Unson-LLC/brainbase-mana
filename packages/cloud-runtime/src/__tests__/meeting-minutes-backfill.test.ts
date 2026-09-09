@@ -71,6 +71,14 @@ describe("meeting minutes backfill contract", () => {
     expect(() => validateMeetingMinutesBackfillSource(request, { ...parent, files: [{ id: request.fileId, name: "meeting.pdf" }] })).toThrow("file_type_invalid");
   });
 
+  it("accepts Slack history's bot profile app id when legacy bot messages omit app_id", () => {
+    const legacyParent = { ...parent, app_id: undefined,
+      bot_profile: { app_id: request.sourceAppId } };
+    expect(validateMeetingMinutesBackfillSource(request, legacyParent)).toEqual({
+      file: parent.files[0], threadTs: parent.thread_ts,
+    });
+  });
+
   it("builds the queue event with the stable id and only the requested file", () => {
     const event = buildMeetingMinutesBackfillEvent(request, parent, {
       tenantId: request.tenantId,
