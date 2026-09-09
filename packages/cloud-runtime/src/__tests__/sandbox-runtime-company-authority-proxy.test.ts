@@ -7,6 +7,7 @@ const proxyMocks = vi.hoisted(() => ({
   createTaskSearchProxyHandler: vi.fn(),
   createTaskWriteProxyHandler: vi.fn(),
   handleBrainbaseMcpProxyRequest: vi.fn(),
+  handleGoogleDriveMcpProxyRequest: vi.fn(),
 }));
 
 vi.mock("@cloudflare/sandbox", () => ({
@@ -43,6 +44,11 @@ vi.mock("../brainbase-mcp-proxy.js", async (importOriginal) => {
   return { ...actual, handleBrainbaseMcpProxyRequest: proxyMocks.handleBrainbaseMcpProxyRequest };
 });
 
+vi.mock("../google-drive-mcp-proxy.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../google-drive-mcp-proxy.js")>();
+  return { ...actual, handleGoogleDriveMcpProxyRequest: proxyMocks.handleGoogleDriveMcpProxyRequest };
+});
+
 vi.mock("../runtime-gateway-proxy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime-gateway-proxy.js")>();
   return { ...actual, createRuntimeGatewayProxyHandler: proxyMocks.gateway };
@@ -53,6 +59,7 @@ import {
   TechKnightSandbox,
 } from "../sandbox-runtime.js";
 import { BRAINBASE_MCP_PROXY_HOST } from "../brainbase-mcp-proxy.js";
+import { GOOGLE_DRIVE_MCP_PROXY_HOST } from "../google-drive-mcp-proxy.js";
 import { TASK_SEARCH_PROXY_HOST } from "../task-search-proxy.js";
 import { TASK_WRITE_PROXY_HOST } from "../task-write-proxy.js";
 import {
@@ -106,6 +113,7 @@ describe("Company Authority sandbox proxy guard", () => {
     proxyMocks.createTaskSearchProxyHandler.mockReset();
     proxyMocks.createTaskWriteProxyHandler.mockReset();
     proxyMocks.handleBrainbaseMcpProxyRequest.mockReset();
+    proxyMocks.handleGoogleDriveMcpProxyRequest.mockReset();
 
     proxyMocks.credentialFetchForResolvedContext.mockReturnValue(vi.fn());
     proxyMocks.createTaskSearchProxyHandler.mockReturnValue(
@@ -116,6 +124,9 @@ describe("Company Authority sandbox proxy guard", () => {
     );
     proxyMocks.handleBrainbaseMcpProxyRequest.mockResolvedValue(
       Response.json({ handled: "brainbase-mcp" }),
+    );
+    proxyMocks.handleGoogleDriveMcpProxyRequest.mockResolvedValue(
+      Response.json({ handled: "google-drive-mcp" }),
     );
   });
 
@@ -235,6 +246,29 @@ describe("Company Authority sandbox proxy guard", () => {
     expect(await response.json()).toEqual({ handled: "task-write" });
     expect(proxyMocks.credentialFetchForResolvedContext).toHaveBeenCalledTimes(1);
     expect(proxyMocks.createTaskWriteProxyHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps placement-scoped Google Drive MCP available with only the service credential", async () => {
+    proxyMocks.resolve.mockResolvedValue(resolvedWithCompanyAuthority);
+    const serviceEnv = {
+      ...env(),
+      GOOGLE_DRIVE_MCP_BASE_URL: "https://drive.example.test",
+      GOOGLE_DRIVE_MCP_TOKEN: "service-token",
+    };
+
+    const route = TechKnightSandbox.outboundByHost![GOOGLE_DRIVE_MCP_PROXY_HOST];
+    const response = await route(request(GOOGLE_DRIVE_MCP_PROXY_HOST), serviceEnv, outboundContext);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ handled: "google-drive-mcp" });
+    expect(proxyMocks.credentialFetchForResolvedContext).toHaveBeenCalledTimes(1);
+    expect(proxyMocks.handleGoogleDriveMcpProxyRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({
+        GOOGLE_DRIVE_MCP_BASE_URL: "https://drive.example.test",
+        GOOGLE_DRIVE_MCP_TOKEN: "service-token",
+      }),
+    );
   });
 
   it("preserves the existing generic proxy path without a Company Authority envelope", async () => {

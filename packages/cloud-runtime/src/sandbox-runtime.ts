@@ -98,6 +98,7 @@ async function authorizeTenantRuntimeProxy(
   }
   if (resolved.company_authority_envelope !== undefined
     && host !== BRAINBASE_MCP_PROXY_HOST
+    && host !== GOOGLE_DRIVE_MCP_PROXY_HOST
     && host !== TASK_WRITE_PROXY_HOST
     && !(host === RUNTIME_GATEWAY_PROXY_HOST
       && await isPersonalKnowledgeGatewayRequest(request))) {
@@ -175,8 +176,11 @@ TechKnightSandbox.outboundByHost = {
           ),
       ),
   [GOOGLE_DRIVE_MCP_PROXY_HOST]: (request, env: SandboxRuntimeEnv) => authorizeTenantRuntimeProxy(
-    request, env, ["mcp_gateway", "brainbase_proxy"], (authorized, credentialFetch, proxyEnv) =>
-      handleGoogleDriveMcpProxyRequest(authorized, proxyEnv, credentialFetch),
+    request, env, ["mcp_gateway", "brainbase_proxy"], (authorized) =>
+      handleGoogleDriveMcpProxyRequest(authorized, {
+        GOOGLE_DRIVE_MCP_BASE_URL: env.GOOGLE_DRIVE_MCP_BASE_URL,
+        GOOGLE_DRIVE_MCP_TOKEN: env.GOOGLE_DRIVE_MCP_TOKEN,
+      }),
   ),
   [RUNTIME_GATEWAY_PROXY_HOST]: async (request, env: SandboxRuntimeEnv) => authorizeTenantRuntimeProxy(
     request, env, await runtimeGatewayBoundaries(request),
