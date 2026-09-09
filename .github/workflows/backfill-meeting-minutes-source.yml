@@ -64,6 +64,14 @@ jobs:
             --data "$payload" \
             'https://unson-business-mana-runtime.unson.workers.dev/admin/meeting-minutes/backfill')"
 
+          if [[ "$status" != "200" ]]; then
+            error_code="$(jq -r '.error // "meeting_minutes_backfill_unknown_failure"' "$response_file" 2>/dev/null || printf '%s' 'meeting_minutes_backfill_invalid_response')"
+            if [[ ! "$error_code" =~ ^(meeting_minutes|company_authority|tenant_context|worker_ingress)_[a-z0-9_]{3,120}$ ]]; then
+              error_code='meeting_minutes_backfill_unknown_failure'
+            fi
+            echo "復旧API失敗: HTTP $status / $error_code" >&2
+            exit 1
+          fi
           jq -e --arg status "$status" --arg messageTs "$MESSAGE_TS" \
             '$status == "200" and .messageTs == $messageTs
              and (.runId | type == "string")
