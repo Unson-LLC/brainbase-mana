@@ -312,6 +312,14 @@ describe("会社別Cloudflare deployment", () => {
     });
   });
 
+  it("routes only the exact Zapier meeting-router identity through company authority", () => {
+    expect(JSON.parse(unson.vars.MANA_COMPANY_AUTHORITY_SLACK_ROLLOUT_JSON)).toContainEqual({
+      workspace_id: "T0882T8N9UH",
+      channel_id: "C0BKTFQ9V38",
+      authenticated_subject_id: "U0BL94R9UJE",
+    });
+  });
+
   it("keeps every same-tenant task board target inside an enabled runtime placement", () => {
     const targets = parseTaskBoardTargets(unson.vars.TASK_BOARD_TARGETS_JSON) as Array<{
       organizationId: string; workspaceId: string; channelId: string; projectCodes: string[]; enabled: boolean;
