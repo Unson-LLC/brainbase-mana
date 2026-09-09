@@ -8,6 +8,7 @@ import type { UserFailure } from "./multitenancy/failure.js";
 import { deriveCorrelationId } from "./multitenancy/ids.js";
 import { readSlackDeliveryReadback } from "./multitenancy/slack-delivery-readback.js";
 import { escapeUntrustedSlackMrkdwn } from "./slack-mrkdwn.js";
+import type { MeetingMinutesBackfillSourceMessage } from "./meeting-minutes-backfill.js";
 
 export interface SlackSelectionMessage {
   replace_original: true;
@@ -204,7 +205,14 @@ export function suggestedDestinationMessage(run: MeetingMinutesRun,
   ] };
 }
 
-interface SlackApiResponse { ok?: boolean; error?: string; ts?: string; team_id?: string; bot_id?: string }
+interface SlackApiResponse {
+  ok?: boolean;
+  error?: string;
+  ts?: string;
+  team_id?: string;
+  bot_id?: string;
+  messages?: Array<Record<string, unknown>>;
+}
 
 /** Tenant identity and expiry bound to the source Slack credential readback. */
 export interface MeetingMinutesTerminalReadbackBinding {
@@ -388,6 +396,34 @@ export class MeetingMinutesSlackClient {
     if (!response.ok || !result.ok) throw new Error(`slack_api_failed:${method}:${result.error ?? response.status}`);
     return result;
   }
+
+  /** Read one exact parent message through the existing broker/bot client. */
+  async readSourceMessage(channelId: string, messageTs: string): Promise<MeetingMinutesBackfillSourceMessage> {
+    if (!/^[A-Z0-9]{2,64}$/.test(channelId)) throw new Error("slack_source_channel_invalid");
+    if (!/^\d{1,20}(?:\.\d{1,12})?$/.test(messageTs)) throw new Error("slack_source_message_invalid");
+    const result = await this.post("conversations.history", {
+      channel: channelId,
+      oldest: messageTs,
+      latest: messageTs,
+      inclusive: true,
+      limit: 1,
+    });
+    const message = result.messages?.find((candidate) => candidate.ts === messageTs);
+    if (!message) throw new Error("slack_source_message_not_found");
+    if (message.channel !== undefined && message.channel !== channelId) {
+      throw new Error("slack_source_channel_mismatch");
+    }
+    return {
+      channel: channelId,
+      ts: message.ts,
+      ...(typeof message.thread_ts === "string" ? { thread_ts: message.thread_ts } : {}),
+      ...(typeof message.app_id === "string" ? { app_id: message.app_id } : {}),
+      ...(typeof message.subtype === "string" ? { subtype: message.subtype } : {}),
+      ...(typeof message.text === "string" ? { text: message.text } : {}),
+      ...(Array.isArray(message.files) ? { files: message.files } : {}),
+    };
+  }
+
   async downloadTextFile(fileId: string, maxBytes = 20 * 1024 * 1024): Promise<string> {
     if (!this.token?.trim() && !this.brokered) throw new Error("slack_bot_token_not_configured");
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(fileId)) throw new Error("slack_file_id_invalid");

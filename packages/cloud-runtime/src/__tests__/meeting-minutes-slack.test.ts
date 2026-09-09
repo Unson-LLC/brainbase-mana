@@ -991,6 +991,34 @@ describe("MeetingMinutesSlackClient", () => {
       expect.objectContaining({ headers: { Authorization: "Bearer xoxb-token" } }));
   });
 
+  it("reads the exact source parent from Slack history", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://slack.com/api/conversations.history");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        channel: "C1", oldest: "1788948593.030659", latest: "1788948593.030659",
+        inclusive: true, limit: 1,
+      });
+      return Response.json({ ok: true, messages: [{
+        channel: "C1", ts: "1788948593.030659", thread_ts: "1788948593.000001",
+        app_id: "A_ZAPIER", subtype: "bot_message", text: "議事録テキスト",
+        files: [{ id: "F1", name: "meeting.txt", mimetype: "text/plain", size: 12 }],
+      }] });
+    }) as typeof fetch;
+
+    await expect(new MeetingMinutesSlackClient("xoxb-token", fetchImpl).readSourceMessage(
+      "C1", "1788948593.030659",
+    )).resolves.toMatchObject({
+      channel: "C1", ts: "1788948593.030659", app_id: "A_ZAPIER", files: [{ id: "F1" }],
+    });
+  });
+
+  it("fails closed when Slack history has no exact source timestamp", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ ok: true, messages: [{ channel: "C1", ts: "1.1" }] })) as typeof fetch;
+    await expect(new MeetingMinutesSlackClient("xoxb-token", fetchImpl).readSourceMessage("C1", "1.2"))
+      .rejects.toThrow("slack_source_message_not_found");
+  });
+
   it("uses a deterministic UUID client_msg_id for retry-safe posts", async () => {
     const bodies: unknown[] = [];
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

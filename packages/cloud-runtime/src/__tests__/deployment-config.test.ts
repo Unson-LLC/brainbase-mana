@@ -829,7 +829,9 @@ describe("会社別Cloudflare deployment", () => {
     expect(worker).toContain("queuedTenantBody.payload.channelId");
     expect(worker).toContain("queuedTenantBody.payload.sourceAppId");
     expect(worker).toContain("isMeetingMinutesSlackEvent(tenantBody.payload, meetingMinutesConfig, trustedMeetingMinutesIntegration)");
-    expect(worker).toContain("const childEventId = await childInteractionEventId(event.eventId, `meeting-minutes-file:${file.id}`)");
+    expect(worker).toContain("let childEventId = await childInteractionEventId(event.eventId, `meeting-minutes-file:${file.id}`)");
+    expect(worker).toContain("if (isMeetingMinutesBackfillEvent(event) && event.files?.length === 1)");
+    expect(worker).toContain("childEventId = event.eventId");
     expect(worker).toContain("const runId = `${childEvent.eventId}_${file.id}`");
     expect(worker).toContain('"https://tenant-runtime.internal", undefined,');
     expect(worker).toContain("env.BRAINBASE_TENANT_RUNTIME_SERVICE?.fetch.bind(env.BRAINBASE_TENANT_RUNTIME_SERVICE)");
