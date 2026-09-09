@@ -15,6 +15,10 @@ on:
         description: 復旧理由（監査用）
         required: true
         type: string
+      recovery_revision:
+        description: 既存の失敗runを再作成する場合だけ指定する復旧番号（1-999）
+        required: false
+        type: string
 
 concurrency:
   group: meeting-minutes-source-backfill-${{ inputs.message_ts }}
@@ -38,12 +42,16 @@ jobs:
           MESSAGE_TS: ${{ inputs.message_ts }}
           FILE_ID: ${{ inputs.file_id }}
           BACKFILL_REASON: ${{ inputs.reason }}
+          RECOVERY_REVISION: ${{ inputs.recovery_revision }}
           SANDBOX_PROBE_TOKEN: ${{ secrets.SANDBOX_PROBE_TOKEN }}
         run: |
           set -euo pipefail
           [[ "$MESSAGE_TS" =~ ^[0-9]{10}\.[0-9]{6}$ ]]
           [[ "$FILE_ID" =~ ^F[A-Z0-9]{8,31}$ ]]
           test -n "$BACKFILL_REASON"
+          if [[ -n "$RECOVERY_REVISION" ]]; then
+            [[ "$RECOVERY_REVISION" =~ ^[1-9][0-9]{0,2}$ ]]
+          fi
           test -n "$SANDBOX_PROBE_TOKEN"
 
           response_file="$(mktemp)"
@@ -55,7 +63,9 @@ jobs:
             --arg messageTs "$MESSAGE_TS" \
             --arg fileId "$FILE_ID" \
             --arg sourceAppId 'A024R9PQM' \
-            '{tenantId:$tenantId,workspaceId:$workspaceId,channelId:$channelId,messageTs:$messageTs,fileId:$fileId,sourceAppId:$sourceAppId}')"
+            --arg recoveryRevision "$RECOVERY_REVISION" \
+            '{tenantId:$tenantId,workspaceId:$workspaceId,channelId:$channelId,messageTs:$messageTs,fileId:$fileId,sourceAppId:$sourceAppId}
+             + (if $recoveryRevision == "" then {} else {recoveryRevision:($recoveryRevision | tonumber)} end)')"
           status="$(curl -sS --connect-timeout 15 --max-time 45 \
             -o "$response_file" -w '%{http_code}' \
             -X POST \
@@ -86,6 +96,9 @@ jobs:
             printf '%s\n' "- 元投稿: \`$MESSAGE_TS\`"
             printf '%s\n' "- file ID: \`$FILE_ID\`"
             printf '%s\n' "- 理由: $BACKFILL_REASON"
+            if [[ -n "$RECOVERY_REVISION" ]]; then
+              printf '%s\n' "- 復旧リビジョン: \`$RECOVERY_REVISION\`"
+            fi
             echo '- API応答（安全な項目のみ）:'
             echo '```json'
             echo "$safe_result"

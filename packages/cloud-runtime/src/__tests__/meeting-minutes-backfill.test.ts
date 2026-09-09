@@ -56,6 +56,21 @@ describe("meeting minutes backfill contract", () => {
     expect(eventId).not.toContain(request.fileId);
   });
 
+  it("derives a new stable event id only when an explicit recovery revision is supplied", () => {
+    const recovery = { ...request, recoveryRevision: 2 };
+    const eventId = deriveMeetingMinutesBackfillEventId(recovery);
+    expect(parseMeetingMinutesBackfillRequest(recovery)).toEqual(recovery);
+    expect(eventId).toBe(deriveMeetingMinutesBackfillEventId(recovery));
+    expect(eventId).not.toBe(deriveMeetingMinutesBackfillEventId(request));
+    expect(eventId).toMatch(/^meeting_minutes_backfill_[0-9a-f]{32}$/);
+  });
+
+  it.each([0, -1, 1.5, 1000, "2"])("rejects an invalid recovery revision: %s", (recoveryRevision) => {
+    expect(() => parseMeetingMinutesBackfillRequest({ ...request, recoveryRevision })).toThrow(
+      "meeting_minutes_backfill_recovery_revision_invalid",
+    );
+  });
+
   it("marks only the derived backfill event for direct run identity", () => {
     const eventId = deriveMeetingMinutesBackfillEventId(request);
     expect(isMeetingMinutesBackfillEvent({ eventId })).toBe(true);

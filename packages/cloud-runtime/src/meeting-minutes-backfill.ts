@@ -14,7 +14,11 @@ const BACKFILL_REQUEST_FIELDS = [
   "messageTs",
   "fileId",
   "sourceAppId",
+  "recoveryRevision",
 ] as const;
+const REQUIRED_BACKFILL_REQUEST_FIELDS = BACKFILL_REQUEST_FIELDS.filter(
+  (field) => field !== "recoveryRevision",
+);
 
 export const MEETING_MINUTES_BACKFILL_EVENT_PREFIX = "meeting_minutes_backfill_";
 
@@ -26,6 +30,8 @@ export interface MeetingMinutesBackfillRequest {
   readonly fileId: string;
   /** Slack app that authored the source message, not the Events API receiver. */
   readonly sourceAppId: string;
+  /** Explicit operator revision used only to recover a terminally failed prior run. */
+  readonly recoveryRevision?: number;
 }
 
 /** A source observation returned by Slack history. It intentionally has no URL or credential fields. */
@@ -75,9 +81,16 @@ function validTimestamp(value: unknown, code: string): string {
 export function parseMeetingMinutesBackfillRequest(value: unknown): MeetingMinutesBackfillRequest {
   if (!isRecord(value)) reject("meeting_minutes_backfill_request_invalid");
   const keys = Object.keys(value);
-  if (keys.length !== BACKFILL_REQUEST_FIELDS.length
+  if (keys.length < REQUIRED_BACKFILL_REQUEST_FIELDS.length
+    || keys.length > BACKFILL_REQUEST_FIELDS.length
+    || REQUIRED_BACKFILL_REQUEST_FIELDS.some((key) => !keys.includes(key))
     || keys.some((key) => !(BACKFILL_REQUEST_FIELDS as readonly string[]).includes(key))) {
     reject("meeting_minutes_backfill_request_fields_invalid");
+  }
+  const recoveryRevision = value.recoveryRevision;
+  if (recoveryRevision !== undefined && (!Number.isSafeInteger(recoveryRevision)
+    || (recoveryRevision as number) < 1 || (recoveryRevision as number) > 999)) {
+    reject("meeting_minutes_backfill_recovery_revision_invalid");
   }
   return {
     tenantId: requiredString(value.tenantId, TENANT_ID_PATTERN, "meeting_minutes_backfill_tenant_invalid"),
@@ -86,6 +99,7 @@ export function parseMeetingMinutesBackfillRequest(value: unknown): MeetingMinut
     messageTs: validTimestamp(value.messageTs, "meeting_minutes_backfill_message_invalid"),
     fileId: requiredString(value.fileId, SLACK_FILE_ID_PATTERN, "meeting_minutes_backfill_file_invalid"),
     sourceAppId: requiredString(value.sourceAppId, SOURCE_APP_ID_PATTERN, "meeting_minutes_backfill_source_app_invalid"),
+    ...(recoveryRevision === undefined ? {} : { recoveryRevision: recoveryRevision as number }),
   };
 }
 
@@ -108,12 +122,17 @@ function stableWord(value: string, seed: bigint): string {
 
 /** Stable synthetic event identity. It deliberately excludes fileId/sourceAppId and caller-provided event ids. */
 export function deriveMeetingMinutesBackfillEventId(
-  value: Pick<MeetingMinutesBackfillRequest, "workspaceId" | "channelId" | "messageTs">,
+  value: Pick<MeetingMinutesBackfillRequest, "workspaceId" | "channelId" | "messageTs" | "recoveryRevision">,
 ): string {
   const workspaceId = requiredString(value.workspaceId, SLACK_ID_PATTERN, "meeting_minutes_backfill_workspace_invalid");
   const channelId = requiredString(value.channelId, SLACK_ID_PATTERN, "meeting_minutes_backfill_channel_invalid");
   const messageTs = validTimestamp(value.messageTs, "meeting_minutes_backfill_message_invalid");
-  const source = `${workspaceId}\0${channelId}\0${messageTs}`;
+  const recoveryRevision = value.recoveryRevision;
+  if (recoveryRevision !== undefined && (!Number.isSafeInteger(recoveryRevision)
+    || recoveryRevision < 1 || recoveryRevision > 999)) {
+    reject("meeting_minutes_backfill_recovery_revision_invalid");
+  }
+  const source = `${workspaceId}\0${channelId}\0${messageTs}${recoveryRevision === undefined ? "" : `\0recovery:${recoveryRevision}`}`;
   return `${MEETING_MINUTES_BACKFILL_EVENT_PREFIX}${stableWord(source, 14_695_981_039_346_656_037n)}${stableWord(source, 10_995_116_282_11n)}`;
 }
 

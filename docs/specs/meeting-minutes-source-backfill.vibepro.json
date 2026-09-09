@@ -62,6 +62,21 @@
       "confidence": 0.99
     },
     {
+      "id": "C-004",
+      "type": "contract",
+      "statement": "終端失敗した既存runだけは運用者が1から999の復旧リビジョンを明示し、元投稿とfile照合を変えずに新しい決定的run IDで再投入できる。未指定時の既存IDは変わらない",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-4" }],
+        "code_refs": [
+          { "file": "packages/cloud-runtime/src/meeting-minutes-backfill.ts" },
+          { "file": ".github/workflows/backfill-meeting-minutes-source.yml" }
+        ],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-backfill.test.ts", "case": "derives a new stable event id only when an explicit recovery revision is supplied" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-backfill.test.ts", "must_cover": "explicit recovery revision" }] },
+      "confidence": 0.99
+    },
+    {
       "id": "C-003",
       "type": "contract",
       "statement": "Slack履歴で信頼済みと再確認したbot_messageのバックフィルは、通常入口へ信頼済み連携として明示的に渡し、対象0件として黙って終了させず議事録runと保存先選択返信を作成する",
