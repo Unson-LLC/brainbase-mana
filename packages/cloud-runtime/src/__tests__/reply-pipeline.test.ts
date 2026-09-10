@@ -812,48 +812,61 @@ describe("TechKnight Slack reply pipeline", () => {
     );
   });
 
-  it("lets triage admit an ambient channel message that can add concrete value", async () => {
+  it("ignores an ordinary ambient channel message before sandbox or Slack delivery", async () => {
     const fs = new MemoryFs();
-    const triage = vi.fn().mockResolvedValue({ action: "reply" as const, reason: "業務支援対象" });
-    const { options, sandbox } = harness({
+    const { options, sandbox, fetchMock } = harness({
       respondPolicy: { im: "always", mpim: "mention", channel: "mention", engagedThreads: true },
-      triage,
+      isEngagedThread: false,
     });
 
     await expect(processReplyEvent(fs, event({ eventType: "message", text: "次の打ち手を整理したい" }), options))
-      .resolves.toMatchObject({ outcome: "replied" });
-    expect(triage).toHaveBeenCalledOnce();
-    expect(sandbox.exec).toHaveBeenCalledOnce();
-  });
-
-  it("keeps ambient messages silent when triage says silent", async () => {
-    const fs = new MemoryFs();
-    const triage = vi.fn().mockResolvedValue({ action: "silent" as const, reason: "他者間の雑談" });
-    const { options, sandbox } = harness({
-      respondPolicy: { im: "always", mpim: "mention", channel: "mention", engagedThreads: true },
-      triage,
-    });
-
-    await expect(processReplyEvent(fs, event({ eventType: "message", text: "ランチどうする？" }), options))
       .resolves.toEqual({ outcome: "ignored" });
-    expect(triage).toHaveBeenCalledOnce();
+    expect(options.createSandbox).not.toHaveBeenCalled();
     expect(sandbox.exec).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("acknowledges a triaged short message with one idempotent emoji and no text reply", async () => {
+  it("keeps an ordinary engaged-thread follow-up on the existing reply path", async () => {
     const fs = new MemoryFs();
-    const triage = vi.fn().mockResolvedValue({ action: "react" as const, emoji: "thumbsup" });
     const { options, sandbox, fetchMock } = harness({
       respondPolicy: { im: "always", mpim: "mention", channel: "mention", engagedThreads: true },
-      triage,
+      isEngagedThread: true,
     });
 
-    await expect(processReplyEvent(fs, event({ eventType: "message", text: "ありがとう" }), options))
-      .resolves.toMatchObject({ outcome: "reacted" });
+    const input = event({ eventType: "message", text: "続けて整理したい" });
+    expect(isReplyEligible(input, options)).toBe(true);
+    await expect(processReplyEvent(fs, input, options)).resolves.toMatchObject({ outcome: "replied" });
+    expect(sandbox.exec).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("chat.postMessage"))).toBe(true);
+  });
+
+  it("ignores an engaged-thread message that explicitly mentions another Slack user", async () => {
+    const fs = new MemoryFs();
+    const { options, sandbox, fetchMock } = harness({
+      respondPolicy: { im: "always", mpim: "mention", channel: "mention", engagedThreads: true },
+      isEngagedThread: true,
+    });
+
+    const input = event({ eventType: "message", text: "<@U_OTHER> 次の打ち手を整理したい" });
+    expect(isReplyEligible(input, options)).toBe(false);
+    await expect(processReplyEvent(fs, input, options)).resolves.toEqual({ outcome: "ignored" });
+    expect(options.createSandbox).not.toHaveBeenCalled();
     expect(sandbox.exec).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe("https://slack.com/api/reactions.add");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ name: "thumbsup" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an explicit Mana app mention on the reply path", async () => {
+    const fs = new MemoryFs();
+    const { options, sandbox, fetchMock } = harness({
+      respondPolicy: { im: "always", mpim: "mention", channel: "mention", engagedThreads: true },
+      isEngagedThread: false,
+    });
+
+    const input = event({ eventType: "app_mention", text: "<@U_BOT> 次の打ち手を整理したい" });
+    expect(isReplyEligible(input, options)).toBe(true);
+    await expect(processReplyEvent(fs, input, options)).resolves.toMatchObject({ outcome: "replied" });
+    expect(sandbox.exec).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("chat.postMessage"))).toBe(true);
   });
   it("partitions ephemeral reply containers by the verified tenant boundary", async () => {
     const tenantA = harness({ tenantBoundaryHandle: TENANT_BOUNDARY_A });

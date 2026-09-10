@@ -1,4 +1,3 @@
-import type { RuntimeTriageDecision } from "./runtime-triage.js";
 import {
   processReplyEvent,
   ReplyPipelineError,
@@ -40,7 +39,6 @@ export type ReplyRuntimeBaseOptions = Omit<ReplyPipelineOptions,
   | "requesterIdentity"
   | "requesterProfile"
   | "graphContext"
-  | "triage"
 >;
 
 export interface ReplyRuntimeExecutionInput {
@@ -52,7 +50,6 @@ export interface ReplyRuntimeExecutionInput {
     taskSearch: ReplyTaskSearchOptions;
   }): Promise<PreparedReplyRequester>;
   options: ReplyRuntimeBaseOptions;
-  triage?(event: SlackQueueEvent, requester: PreparedReplyRequester): Promise<RuntimeTriageDecision>;
 }
 
 function validatePreparedRequester(
@@ -101,9 +98,6 @@ export function executeReplyRuntime(
       requesterIdentity: requester.requesterIdentity,
       requesterProfile: requester.requesterProfile,
       graphContext: requester.graphContext,
-      ...(input.triage
-        ? { triage: (event) => input.triage!(event, requester) }
-        : {}),
     };
     return processReplyEvent(input.fs, input.event, options);
   });

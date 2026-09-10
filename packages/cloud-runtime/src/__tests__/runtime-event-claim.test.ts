@@ -128,7 +128,7 @@ describe("runtime event claim", () => {
       .toBe(runtimeDeliveryId({ ...base, eventId: "EvMessage", eventType: "message" }));
   });
 
-  it("releases a silent ambient claim so the canonical mention can still be processed", async () => {
+  it("releases a non-reply claim so the canonical mention can still be processed", async () => {
     const db = storage();
     const ambient = { eventId: "EvMessage", eventType: "message" as const, messageTs: "1786677816.307859" };
     const mention = { eventId: "EvMention", eventType: "app_mention" as const, messageTs: ambient.messageTs };
@@ -138,7 +138,6 @@ describe("runtime event claim", () => {
     const ambientClaim = await claimRuntimeEvent(db, deliveryId, 1_000);
     if (ambientClaim.disposition !== "claimed") throw new Error("expected_ambient_claim");
     expect(runtimeClaimSettlement({ outcome: "ignored" })).toBe("release");
-    expect(runtimeClaimSettlement({ outcome: "reacted", responseTs: ambient.messageTs })).toBe("release");
     await releaseRuntimeEvent(db, deliveryId, ambientClaim.claimToken);
 
     expect(await claimRuntimeEvent(db, runtimeDeliveryId(mention), 1_001))

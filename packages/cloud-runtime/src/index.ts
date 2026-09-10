@@ -186,7 +186,6 @@ import {
   runtimeDeliveryId,
   shouldAckRuntimeEventInProgress,
 } from "./runtime-event-claim.js";
-import { runRuntimeTriage } from "./runtime-triage.js";
 import { armMeetingMinutesRecovery, isMeetingMinutesRecovery,
   MEETING_MINUTES_RECOVERY_DELAY_SECONDS } from "./meeting-minutes-recovery.js";
 import {
@@ -2981,7 +2980,7 @@ interface SharedReplyRuntimeInput {
  * Shared ordinary reply executor for the legacy T0 queue and A0's selected
  * runtime.execute provider. The caller owns queue/idempotency and container
  * admission; this function owns the real reply pipeline and its existing task,
- * graph, triage, sandbox, and Slack delivery dependencies.
+ * graph, sandbox, and Slack delivery dependencies.
  */
 function executeSharedReplyRuntime(input: SharedReplyRuntimeInput): Promise<ReplyProcessResult> {
   const {
@@ -3182,48 +3181,6 @@ function executeSharedReplyRuntime(input: SharedReplyRuntimeInput): Promise<Repl
         return hydrateSlackAttachments(withParticipants, { fetchImpl: tenantCredentialFetch });
       },
       postReply,
-    },
-    triage: async (triageEvent, requester) => {
-      const hydrated = await hydrateSlackQueueEventThreadContext(triageEvent, {
-        fetch: tenantCredentialFetch,
-        contextAfterTs: workspaceSession.contextAfterTs,
-      });
-      const withParticipants = {
-        ...hydrated,
-        threadContext: await appendSlackThreadParticipantProfiles(hydrated.threadContext, {
-          fetchImpl: tenantCredentialFetch,
-        }),
-      };
-      const hydratedWithAttachments = await hydrateSlackAttachments(withParticipants, {
-        fetchImpl: tenantCredentialFetch,
-      });
-      const recentThread = (hydratedWithAttachments.threadContext ?? "")
-        .split("\n")
-        .filter(Boolean)
-        .slice(-10)
-        .map((text) => ({ speaker: "thread", text }));
-      const decision = await runRuntimeTriage({
-        botName: "まな",
-        persona: placement.runtimeContext?.persona,
-        speakerName: requester.requesterProfile.displayName
-          ?? requester.requesterProfile.realName
-          ?? requester.requesterProfile.handle
-          ?? "Slack user",
-        channelType: triageEvent.channelType ?? "channel",
-        messageText: triageEvent.text,
-        attachmentNames: triageEvent.files?.map((file) => file.name),
-        recentThread,
-      }, {
-        model: claudeRuntime.model,
-        effort: claudeRuntime.effort,
-        tenantBoundaryHandle,
-        createSandbox: (sandboxId: string) => createTechKnightSandbox(env, sandboxId),
-      });
-      emitTurnLog("log", "mana_triage_decided", triageEvent, trace, {
-        outcome: decision.action,
-        reasonCode: decision.reason,
-      });
-      return decision;
     },
   });
 }
@@ -5550,15 +5507,11 @@ export default {
                 isEngagedThread: workspaceSession.engaged === true,
                 botAttributedAppMentionUserIds: placement.audience?.allowedUserIds,
               });
-              // Slack may emit an ordinary message before the app_mention for the
-              // same post. An ineligible variant must never claim the shared
-              // message delivery id and suppress the eligible variant.
-              const ambientTriageCandidate = event.eventType === "message"
-                && event.channelType !== "im"
-                && Boolean(event.userId)
-                && !event.botId
-                && event.subtype !== "bot_message";
-              if (!replyEligible && !ambientTriageCandidate) return { outcome: "ignored" as const };
+              // An ineligible event must never claim the shared message delivery
+              // id. Slack may deliver an ordinary message before a canonical
+              // app_mention for the same post; leave that message unclaimed so
+              // the explicit mention remains eligible.
+              if (!replyEligible) return { outcome: "ignored" as const };
               const runtimeClaim = await workspaceStub.claimRuntimeEvent(deliveryId);
               if (runtimeClaim.disposition === "completed") {
                 return {
