@@ -44,7 +44,7 @@ export function runtimeDeliveryId(event: Pick<SlackQueueEvent, "eventId" | "mess
 /**
  * Claims the canonical Slack message delivery identity. `message` and
  * `app_mention` variants of one Slack post intentionally share this claim, but
- * only a delivered text reply completes it. Non-reply triage releases it so a
+ * only a delivered text reply completes it. Non-reply outcomes release it so a
  * later explicit mention remains eligible.
  */
 export async function claimRuntimeEvent(
@@ -93,7 +93,7 @@ export function shouldAckRuntimeEventInProgress(
 }
 
 export function runtimeClaimSettlement(result: { outcome?: string; responseTs?: string }): RuntimeClaimSettlement {
-  if (result.outcome === "ignored" || result.outcome === "reacted") return "release";
+  if (result.outcome === "ignored") return "release";
   return typeof result.responseTs === "string" && result.responseTs.length > 0 ? "complete" : "release";
 }
 

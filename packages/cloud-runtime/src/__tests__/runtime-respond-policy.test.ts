@@ -31,4 +31,20 @@ describe("runtime Slack respond policy", () => {
     expect(isReplyEligible(event, { ...boundary, isEngagedThread: false })).toBe(false);
     expect(isReplyEligible(event, { ...boundary, isEngagedThread: true })).toBe(true);
   });
+  it.each(["U_OTHER", "W_OTHER"] as const)("rejects an engaged-thread message that explicitly addresses another Slack user (%s)", (slackUserId) => {
+    const event: SlackQueueEvent = { tenantId: "unson-business", eventId: "Ev3", workspaceId: "T1",
+      channelId: "C1", channelType: "channel", threadTs: "1", messageTs: "3", userId: "U1",
+      eventType: "message", text: `<@${slackUserId}> 続けて`, receivedAt: "2026-08-14T00:00:00Z" };
+    const boundary = { expectedTenantId: "unson-business", expectedWorkspaceId: "T1",
+      allowedChannelId: "C1", respondPolicy: config, isEngagedThread: true };
+    expect(isReplyEligible(event, boundary)).toBe(false);
+  });
+  it("keeps explicit app mentions eligible even when the text contains a user mention", () => {
+    const event: SlackQueueEvent = { tenantId: "unson-business", eventId: "Ev4", workspaceId: "T1",
+      channelId: "C1", channelType: "channel", threadTs: "1", messageTs: "4", userId: "U1",
+      eventType: "app_mention", text: "<@U_MANA> <@U_OTHER> 続けて", receivedAt: "2026-08-14T00:00:00Z" };
+    const boundary = { expectedTenantId: "unson-business", expectedWorkspaceId: "T1",
+      allowedChannelId: "C1", respondPolicy: config, isEngagedThread: false };
+    expect(isReplyEligible(event, boundary)).toBe(true);
+  });
 });

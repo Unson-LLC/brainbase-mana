@@ -31,7 +31,6 @@ import { emitTurnLog, type TurnRuntimeTrace } from "./turn-observability.js";
 import { evaluateRuntimeRespondPolicy, type RuntimeRespondPolicy } from "./runtime-respond-policy.js";
 import { markWorkspaceEngaged } from "./workspace-session.js";
 import { resolveTurnActorIdentity, type ActorIdentityResolver } from "./actor-identity.js";
-import type { RuntimeTriageDecision } from "./runtime-triage.js";
 import {
   auditReplyJudgmentAttempt,
   completeReplyJudgmentAttempt,
@@ -219,7 +218,6 @@ export interface ReplyPipelineOptions {
   respondPolicy?: RuntimeRespondPolicy;
   isEngagedThread?: boolean;
   botAttributedAppMentionUserIds?: readonly string[];
-  triage?(event: SlackQueueEvent): Promise<RuntimeTriageDecision>;
   runtimeContext?: { persona: string; instructions: readonly string[]; skills: readonly string[]; escalationEmployee?: string };
   resolveActorIdentity?: ActorIdentityResolver;
   createSandbox(id: string): ReplySandbox;
@@ -244,7 +242,7 @@ export interface SlackPostResponseObservation {
 }
 
 export interface ReplyProcessSuccessResult {
-  outcome: "ignored" | "already_completed" | "reacted" | "replied";
+  outcome: "ignored" | "already_completed" | "replied";
   responseTs?: string;
 }
 
@@ -386,23 +384,16 @@ export function isReplyEligible(
     Boolean(event.userId)
   );
   if (!boundaryAllowed) return false;
+  // A message event can be delivered before Slack's canonical app_mention
+  // event. If that message addresses another Slack user, an engaged thread
+  // must not promote it into a reply merely because the thread is active.
+  // The normalized app_mention path remains the only explicit assistant
+  // mention path and is intentionally not subject to this guard.
+  if (event.eventType === "message" && /<@[UW][A-Z0-9_-]{1,127}>/.test(event.text)) return false;
   if (!options.respondPolicy) return event.eventType === "app_mention";
   if (event.eventType !== "app_mention" && event.eventType !== "message") return false;
   return evaluateRuntimeRespondPolicy({ config: options.respondPolicy, channelType: event.channelType,
     wasMentioned: event.eventType === "app_mention", isEngagedThread: options.isEngagedThread === true }).allow;
-}
-
-function isReplyBoundaryEligible(
-  event: SlackQueueEvent,
-  options: Pick<ReplyPipelineOptions, "expectedTenantId" | "expectedWorkspaceId" | "allowedChannelId">,
-): boolean {
-  return event.tenantId === (options.expectedTenantId ?? "techknight")
-    && event.workspaceId === options.expectedWorkspaceId
-    && event.channelId === options.allowedChannelId
-    && !event.botId
-    && event.subtype !== "bot_message"
-    && Boolean(event.userId)
-    && (event.eventType === "app_mention" || event.eventType === "message");
 }
 
 function normalizePromptText(text: string): string {
@@ -1064,29 +1055,6 @@ async function setSlackProcessingReaction(
   return false;
 }
 
-async function addSlackTriageReaction(
-  event: SlackQueueEvent,
-  emoji: string,
-  options: Pick<ReplyPipelineOptions, "slackBotToken" | "fetch">,
-): Promise<boolean> {
-  if (!options.slackBotToken && !options.fetch) return false;
-  const name = emoji.replace(/^:+|:+$/g, "").replace(/[^a-z0-9_+-]/gi, "").slice(0, 64) || "eyes";
-  try {
-    const response = await (options.fetch ?? fetch)("https://slack.com/api/reactions.add", {
-      method: "POST",
-      headers: { ...(options.slackBotToken ? { authorization: `Bearer ${options.slackBotToken}` } : {}),
-        "content-type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ channel: event.channelId, timestamp: event.messageTs, name }),
-      signal: AbortSignal.timeout(SLACK_REACTION_TIMEOUT_MS),
-    });
-    if (!response.ok) return false;
-    const payload = await response.json() as { ok?: unknown; error?: unknown };
-    return payload.ok === true || payload.error === "already_reacted";
-  } catch {
-    return false;
-  }
-}
-
 export async function setSlackThreadStatus(
   event: SlackQueueEvent,
   status: string,
@@ -1197,21 +1165,7 @@ export async function processReplyEvent(
   event: SlackQueueEvent,
   options: ReplyPipelineOptions,
 ): Promise<ReplyProcessResult> {
-  let eligible = isReplyEligible(event, options);
-  let triageDecision: RuntimeTriageDecision | undefined;
-  if (!eligible && options.triage && isReplyBoundaryEligible(event, options)
-    && event.eventType === "message" && event.channelType !== "im") {
-    triageDecision = await options.triage(event);
-    eligible = triageDecision.action === "reply";
-  }
-  if (!eligible && triageDecision?.action === "react") {
-    const reacted = await addSlackTriageReaction(event, triageDecision.emoji ?? "eyes", options);
-    if (!reacted) return { outcome: "ignored" };
-    const completedAt = options.now?.() ?? new Date().toISOString();
-    await persistReplyCompletion(fs, { eventId: event.eventId, responseTs: event.messageTs, completedAt });
-    return { outcome: "reacted", responseTs: event.messageTs };
-  }
-  if (!eligible) return { outcome: "ignored" };
+  if (!isReplyEligible(event, options)) return { outcome: "ignored" };
   if (await isReplyCompleted(fs, event.eventId)
     || await isReplyJudgmentCompleted(fs, event.eventId)) return { outcome: "already_completed" };
   const existingFailureNotice = await readReplyFailureNotice(fs, event.eventId);

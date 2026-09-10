@@ -598,6 +598,26 @@ describe("Company Authority runtime.execute reply executor", () => {
     expect(runtimeMocks.executeContainer).not.toHaveBeenCalled();
   });
 
+  it("leaves an ineligible ambient message unclaimed before runtime execution", async () => {
+    const env = runtimeEnv();
+    const placements = JSON.parse(env.RUNTIME_PLACEMENTS_JSON!);
+    placements[0].respondTo = { channel: "mention", im: "never", mpim: "never", engagedThreads: true };
+    env.RUNTIME_PLACEMENTS_JSON = JSON.stringify(placements);
+    runtimeMocks.readWorkspaceSession.mockResolvedValue({ generation: 1, engaged: false });
+
+    await expect(executeCompanyAuthorityReplyOperation(env, operation({
+      payload: { text: "通常のチャンネル会話" },
+    }))).resolves.toEqual({
+      applied: false,
+      response_observed: true,
+      failure_code: "REPLY_NOT_ELIGIBLE",
+    });
+    expect(runtimeMocks.workspaceStub.claimRuntimeEvent).not.toHaveBeenCalled();
+    expect(runtimeMocks.executeContainer).not.toHaveBeenCalled();
+    expect(runtimeMocks.executeReplyRuntime).not.toHaveBeenCalled();
+    expect(runtimeMocks.slackRequests).toHaveLength(0);
+  });
+
   it("uses the accepted canonical person, sends through the broker, and confirms the same Slack ts", async () => {
     const candidate = operation();
 
