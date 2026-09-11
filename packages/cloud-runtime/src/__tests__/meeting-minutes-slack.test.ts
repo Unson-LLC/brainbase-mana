@@ -784,9 +784,11 @@ describe("MeetingMinutesSlackClient", () => {
     await new MeetingMinutesSlackClient("token", fetchImpl).updateRunStatus(run, "failed");
     const serialized = JSON.stringify(body);
     expect(serialized).toContain("保存先チャンネルへ投稿できませんでした");
-    expect(serialized).toContain("Manaアプリが「mana」のチャンネルに参加しているか確認してください");
-    expect(serialized).toContain("参加させた後、下のボタンから再実行できます");
+    expect(serialized).toContain("投稿に使ったManaの認証で「mana」へアクセスできませんでした");
+    expect(serialized).toContain("アプリの参加状況と、投稿に使うSlack接続を確認してください");
     expect(serialized).toContain("再実行");
+    expect(serialized).toContain("保存先を変更");
+    expect(serialized).toContain("mana_meeting_minutes_redo");
     expect(serialized).not.toContain("channel_not_found");
   });
 

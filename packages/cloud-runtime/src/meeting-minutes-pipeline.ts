@@ -423,7 +423,11 @@ export async function redoMeetingMinutesRun(fs: WorkspaceFs, command: MeetingMin
     await options.showRedoSuperseded?.(run, command);
     return run;
   }
-  if (run.status !== "completed" || !run.destination || !run.github || !run.slack?.processingTs) {
+  const destinationSlackFailed = run.status === "failed"
+    && run.diagnostics?.stage === "slack_publish"
+    && /^slack_api_failed:chat\.postMessage:(?:channel_not_found|not_in_channel)$/.test(run.failure?.message ?? "");
+  if ((run.status !== "completed" && !destinationSlackFailed)
+    || !run.destination || !run.github || !run.slack?.processingTs) {
     throw new Error("meeting_minutes_redo_not_available");
   }
   const redoRevision = persistedRevision;

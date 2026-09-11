@@ -1134,6 +1134,26 @@ describe("meeting minutes pipeline", () => {
     expect(reopened).not.toHaveProperty("failure");
   });
 
+  it("removes partial outputs and reopens destination selection after destination Slack fails", async () => {
+    const fs = new MemoryFs(); await startMeetingMinutesRuns(fs, event, { enabled: true, routerChannelId: "CROUTER", sourceAppId: "A1",
+      destinations: [destination], requestDestination: vi.fn().mockResolvedValue("2.1") });
+    await expect(resumeMeetingMinutesRun(fs, selection, resumeOptions({
+      postParent: vi.fn().mockRejectedValue(new Error("slack_api_failed:chat.postMessage:channel_not_found")),
+    }))).rejects.toThrow("channel_not_found");
+    const deleteGitHub = vi.fn(); const retractSharedMinutes = vi.fn();
+    const showDestinationSelection = vi.fn().mockResolvedValue("3.1");
+    const reopened = await redoMeetingMinutesRun(fs, redo, { destinations: [destination], deleteGitHub,
+      deleteTask: vi.fn(), retractSharedMinutes, showDestinationSelection });
+    expect(deleteGitHub).toHaveBeenCalledWith(destination, ["docs/transcripts/a.txt", "docs/minutes/a.md"]);
+    expect(retractSharedMinutes).not.toHaveBeenCalled();
+    expect(showDestinationSelection).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }), [destination]);
+    expect(reopened).toMatchObject({ status: "awaiting_destination", revision: 1,
+      slack: { selectionTs: "3.1", postedChunkIndexes: [] } });
+    expect(reopened).not.toHaveProperty("destination");
+    expect(reopened).not.toHaveProperty("github");
+    expect(reopened).not.toHaveProperty("failure");
+  });
+
   it("acknowledges a stale redo as a terminal no-op without changing the newer completed run", async () => {
     const fs = new MemoryFs(); await startMeetingMinutesRuns(fs, event, { enabled: true, routerChannelId: "CROUTER", sourceAppId: "A1",
       destinations: [destination], requestDestination: vi.fn().mockResolvedValue("2.1") });
