@@ -350,8 +350,8 @@ function failedRunDetails(run: MeetingMinutesRun): string[] {
       "議事録本文は共有済みです。タスク登録を再試行するには、下のボタンを押してください。"];
   } else if (/slack_api_failed:chat\.postMessage:(?:channel_not_found|not_in_channel)/.test(run.failure?.message ?? "")) {
     details = ["*⚠️ 保存先チャンネルへ投稿できませんでした*", destination,
-      `Manaアプリが「${run.destination!.name}」のチャンネルに参加しているか確認してください。`,
-      "参加させた後、下のボタンから再実行できます。"];
+      `投稿に使ったManaの認証で「${run.destination!.name}」へアクセスできませんでした。`,
+      "アプリの参加状況と、投稿に使うSlack接続を確認してください。同じ保存先への再実行、または別の保存先への変更ができます。"];
   } else if (isBrainbaseProjectBindingFailure(run)) {
     details = ["*⚠️ Brainbaseのプロジェクト紐付けを確認できませんでした*", destination,
       `「${run.destination!.name}」に対応するBrainbaseプロジェクトが未設定、または利用権限がありません。`,
@@ -613,6 +613,8 @@ export class MeetingMinutesSlackClient {
         `共有先: <#${run.destination.slackChannelId}>`].filter(Boolean).join("\n")
       : failedRunDetails(run).join("\n");
     const diagnosticFailure = run.diagnostics?.failedAt ? run.diagnostics : undefined;
+    const destinationSlackUnavailable = /slack_api_failed:chat\.postMessage:(?:channel_not_found|not_in_channel)/
+      .test(run.failure?.message ?? "");
     const hasLifecycleFailure = !completed || Boolean(run.failure || run.projectionFailure || diagnosticFailure || run.taskRegistration?.failure);
     const lifecycleFailure = diagnosticFailure ?? run.projectionFailure;
     const lifecycleStage = lifecycleFailure?.stage ?? run.taskRegistration?.failure?.stage ?? run.failure?.stage ?? "unknown";
@@ -637,10 +639,17 @@ export class MeetingMinutesSlackClient {
       blocks.push({ type: "actions", elements });
     } else if (!permanentBrainbaseFailure
       && (diagnosticFailure ?? run.projectionFailure)?.retryable !== false) {
-      blocks.push({ type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: "再実行" },
+      const elements: Array<Record<string, unknown>> = [{ type: "button", text: { type: "plain_text", text: "再実行" },
         action_id: `${MEETING_MINUTES_CHOOSE_ACTION_ID}:${run.destination.id}`,
         value: JSON.stringify({ runId: run.runId, destinationId: run.destination.id,
-          sourceThreadTs: run.sourceThreadTs }) }] });
+          sourceThreadTs: run.sourceThreadTs }) }];
+      if (destinationSlackUnavailable) {
+        elements.push({ type: "button", text: { type: "plain_text", text: "保存先を変更" },
+          action_id: MEETING_MINUTES_REDO_ACTION_ID,
+          value: JSON.stringify({ runId: run.runId, fileName: run.file.name, revision: run.revision ?? 0,
+            sourceThreadTs: run.sourceThreadTs }) });
+      }
+      blocks.push({ type: "actions", elements });
     }
     await this.post("chat.update", { channel: run.sourceChannelId, ts: run.slack.processingTs, text: userText, blocks });
     // A task-only retry reaches this common status projection with an already
