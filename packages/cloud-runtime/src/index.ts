@@ -1720,6 +1720,10 @@ function meetingMinutesClients(
             channelId, threadTs, fileName, text, index, total, clientMsgId)),
     },
     redo: {
+      createTask: async (input: Parameters<TaskApiClient["createTask"]>[0], idempotencyKey: string) => {
+        return effects.boundary("brainbase_proxy",
+          (credentialFetch) => taskClient(credentialFetch).createTask(input, idempotencyKey));
+      },
       deleteGitHub: (destination: MeetingMinutesDestination, paths: readonly string[]) =>
         effects.boundary("mcp_gateway", () => new CloudflareMeetingMinutesGitHubClient(
           env.GITHUB_TOKEN ?? "").delete(destination.github, paths)),
