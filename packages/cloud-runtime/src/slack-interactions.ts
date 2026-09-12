@@ -351,6 +351,7 @@ export async function updateSlackInteractionMessage(
   responseUrl: string,
   message: SlackInteractionMessage,
   fetchImpl: typeof fetch = fetch,
+  timeoutMs = 1_500,
 ): Promise<void> {
   const safeUrl = slackResponseUrl(responseUrl);
   if (!safeUrl) throw new Error("slack_response_url_invalid");
@@ -361,7 +362,7 @@ export async function updateSlackInteractionMessage(
     return;
   }
   const result = await fetchImpl(safeUrl, { method: "POST", redirect: "manual",
-    headers: { "content-type": "application/json" }, body: JSON.stringify(message), signal: AbortSignal.timeout(1_500) });
+    headers: { "content-type": "application/json" }, body: JSON.stringify(message), signal: AbortSignal.timeout(timeoutMs) });
   if (!result.ok) throw new Error(`slack_interaction_update_failed:${result.status}`);
 }
 
@@ -395,7 +396,7 @@ export function handleMeetingMinutesInteractionEntrypoint(
     resolveThreadTs,
     updateOriginal: (responseUrl, message, credentialFetch) => updateSlackInteractionMessage(
       responseUrl, message, credentialFetch),
-    updateBeforeTenant: (responseUrl, message) => updateSlackInteractionMessage(responseUrl, message),
+    updateBeforeTenant: (responseUrl, message) => updateSlackInteractionMessage(responseUrl, message, fetch, 800),
     defer: (work) => ctx.waitUntil(work), acknowledgeBeforeTenant: true, approveTaskWrite, handleMeetingTaskAction,
     resolveTenantEffects, isIntakePaused, handleContractLedgerAction });
 }
@@ -986,6 +987,7 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     const navigationFeedbackText = organizationAction ? "プロジェクト一覧を開いています…"
       : backAction ? "ワークスペース一覧を開いています…"
       : destinationAction && selectedDestination ? "処理の開始を確認しています…" : undefined;
+    let immediateReceipt: Promise<void> | undefined;
     if (receiptUrl && projectReceipt && !redoAction && !confirmRedoAction &&
       (navigationFeedbackText || (threadTsCandidates[0] && (!destinationAction || selectedDestination)))) {
       const text = navigationFeedbackText ?? "操作を受け付けました。確認しています。";
@@ -995,7 +997,7 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
         : { replace_original: false, response_type: "in_channel",
           thread_ts: threadTsCandidates[0], text,
           blocks: [{ type: "section", text: { type: "plain_text", text } }] };
-      pending.push(Promise.resolve().then(() => projectReceipt(receiptUrl, receipt)).then(() => {
+      immediateReceipt = Promise.resolve().then(() => projectReceipt(receiptUrl, receipt)).then(() => {
         console.info(JSON.stringify({ event: "meeting_minutes_interaction_receipt_delivered", interactionId,
           actionId, runId: string(actionValue?.runId), channel_id: interactionChannelId,
           feedback_kind: navigationFeedbackText ? "selector_progress" : "thread_receipt",
@@ -1003,10 +1005,15 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
       }).catch(() => {
         console.error(JSON.stringify({ event: "meeting_minutes_interaction_receipt_failed", interactionId,
           actionId, elapsed_ms: Date.now() - receivedAt, code: "STATUS_PROJECTION_FAILED" }));
-      }));
+      });
+      pending.push(immediateReceipt);
     }
     defer((async () => {
       try {
+        // Give the fixed, data-free progress projection exclusive priority.
+        // Its production transport is bounded to 800 ms, so expensive tenant
+        // and catalog work cannot starve the user's first visible response.
+        await immediateReceipt;
         const result = await continueInteraction();
         if (!result.ok) {
           console.warn(JSON.stringify({ event: "meeting_minutes_deferred_interaction_rejected",
@@ -1023,6 +1030,8 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
         }
       }
     })());
+    console.info(JSON.stringify({ event: "meeting_minutes_interaction_ack_returned", interactionId,
+      actionId, elapsed_ms: Date.now() - receivedAt, target_ms: 1_000 }));
     return new Response(null, { status: 200 });
   }
   return continueInteraction();
