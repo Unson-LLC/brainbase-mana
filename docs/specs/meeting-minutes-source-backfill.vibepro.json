@@ -77,6 +77,21 @@
       "confidence": 0.99
     },
     {
+      "id": "C-005",
+      "type": "contract",
+      "statement": "運用者がSlackへ手動で共有した復旧原稿は、productionのMana app ID、9940 router channel、運用者本人のSlack user IDがCompany Authorityで完全一致する場合だけ管理バックフィルできる。Zapier原文の既存境界は維持する",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-5" }],
+        "code_refs": [
+          { "file": ".github/workflows/backfill-meeting-minutes-source.yml" },
+          { "file": "packages/cloud-runtime/wrangler.unson-business.jsonc" }
+        ],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/deployment-config.test.ts", "case": "binds manual recovery posts to the exact Mana app, router channel, and operator" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/deployment-config.test.ts", "must_cover": "manual recovery posts" }] },
+      "confidence": 0.99
+    },
+    {
       "id": "C-003",
       "type": "contract",
       "statement": "Slack履歴で信頼済みと再確認したbot_messageのバックフィルは、通常入口へ信頼済み連携として明示的に渡し、対象0件として黙って終了させず議事録runと保存先選択返信を作成する",
