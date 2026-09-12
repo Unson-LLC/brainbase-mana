@@ -4,7 +4,7 @@ import { isMeetingMinutesFile, meetingMinutesRunId, type AuditedGeneratedMeeting
   type MeetingMinutesRun, type MeetingMinutesSelection,
   type MeetingMinutesRedo, type MeetingMinutesRedoStage,
   meetingMinutesContextProjectCode, OUTCOME_CASE_ID_PATTERN } from "./meeting-minutes-contracts.js";
-import type { CreateTaskInput, UpdateTaskInput } from "@openryoko/task-runtime-core";
+import { TaskApiError, type CreateTaskInput, type UpdateTaskInput } from "@openryoko/task-runtime-core";
 import { assertGeneratedMeetingMinutesNotPlaceholder, splitMeetingMinutesForSlack,
   stripMeetingMinutesActionItems } from "./meeting-minutes-generator.js";
 import { loadMeetingMinutesRun, saveMeetingMinutesRun } from "./meeting-minutes-state.js";
@@ -448,10 +448,18 @@ export async function redoMeetingMinutesRun(fs: WorkspaceFs, command: MeetingMin
         throw new Error("meeting_minutes_redo_task_registration_pending_ambiguous");
       }
       if (!options.createTask) throw new Error("meeting_minutes_redo_task_registration_recovery_unavailable");
-      const recoveredTask = await options.createTask(pendingTask.input, pendingTask.idempotencyKey);
-      if (!recoveredTask.id?.trim()) throw new Error("meeting_minutes_redo_task_invalid_response");
-      run.taskRegistration!.registered.push({ index: pendingTask.index, title: pendingTask.input.title,
-        taskId: recoveredTask.id.trim(), projectCodes: [...(pendingTask.input.project_codes ?? [])] });
+      try {
+        const recoveredTask = await options.createTask(pendingTask.input, pendingTask.idempotencyKey);
+        if (!recoveredTask.id?.trim()) throw new Error("meeting_minutes_redo_task_invalid_response");
+        run.taskRegistration!.registered.push({ index: pendingTask.index, title: pendingTask.input.title,
+          taskId: recoveredTask.id.trim(), projectCodes: [...(pendingTask.input.project_codes ?? [])] });
+      } catch (error) {
+        // Brainbase's readiness guard returns this response before any canonical
+        // mutation.  The durable pending marker is therefore known not to have
+        // produced a task and can be cleared without leaving an orphan behind.
+        if (!(error instanceof TaskApiError) || error.status !== 503
+          || error.code !== "canonical_task_mutation_not_ready") throw error;
+      }
       delete run.taskRegistration!.pending;
       run.updatedAt = now(options);
       await saveMeetingMinutesRun(fs, run);
