@@ -74,6 +74,18 @@
   "brainbase": {
     "stories": [
       {
+        "story_id": "bug-meeting-minutes-selector-feedback-latency",
+        "title": "議事録の一覧ボタンをすぐ反応させる",
+        "ssot": "local",
+        "status": "active",
+        "horizon": null,
+        "view": null,
+        "period": null,
+        "started_at": null,
+        "due_at": null,
+        "contract_type": "bug_fix"
+      },
+      {
         "story_id": "HOTRELOAD-PLACEMENT-AUTHORITY",
         "title": "placement権限変更時に古いClaudeセッションを再開しない",
         "ssot": "local",

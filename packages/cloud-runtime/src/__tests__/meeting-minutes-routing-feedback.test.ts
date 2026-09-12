@@ -117,6 +117,18 @@ function expectGenericReceipt(message: unknown) {
   expect(serialized).not.toContain("mana");
 }
 
+function expectImmediateNavigationFeedback(message: unknown, text: string) {
+  expect(message).toEqual({
+    replace_original: true,
+    text,
+    blocks: [{ type: "section", text: { type: "plain_text", text } }],
+  });
+  const serialized = JSON.stringify(message);
+  expect(serialized).not.toContain("Ev1_F1");
+  expect(serialized).not.toContain("定例.txt");
+  expect(serialized).not.toContain("tech-knight");
+}
+
 describe("meeting minutes routing feedback", () => {
   it.each([
     {
@@ -172,11 +184,19 @@ describe("meeting minutes routing feedback", () => {
     expect(response.status).toBe(200);
     expect(resolveTenantEffects).toHaveBeenCalledOnce();
     const isRedo = actionId === "mana_meeting_minutes_redo" || actionId === "mana_meeting_minutes_confirm_redo";
+    const navigationText = actionId.startsWith("mana_meeting_minutes_choose_organization:")
+      ? "プロジェクト一覧を開いています…"
+      : actionId === "mana_meeting_minutes_back_to_organizations"
+      ? "ワークスペース一覧を開いています…"
+      : actionId === "mana_meeting_minutes_choose_destination"
+      ? "処理の開始を確認しています…"
+      : undefined;
     if (isRedo) {
       expect(updateBeforeTenant).not.toHaveBeenCalled();
     } else {
       await vi.waitFor(() => expect(updateBeforeTenant).toHaveBeenCalledOnce());
-      expectGenericReceipt(updateBeforeTenant.mock.calls[0]?.[1]);
+      if (navigationText) expectImmediateNavigationFeedback(updateBeforeTenant.mock.calls[0]?.[1], navigationText);
+      else expectGenericReceipt(updateBeforeTenant.mock.calls[0]?.[1]);
     }
     expect(updateOriginal).not.toHaveBeenCalled();
     expect(isIntakePaused).not.toHaveBeenCalled();
@@ -392,12 +412,12 @@ describe("meeting minutes routing feedback", () => {
 
     expect(response.status).toBe(200);
     await vi.waitFor(() => expect(updateBeforeTenant).toHaveBeenCalledOnce());
-    expectGenericReceipt(updateBeforeTenant.mock.calls[0]?.[1]);
+    expectImmediateNavigationFeedback(updateBeforeTenant.mock.calls[0]?.[1], "処理の開始を確認しています…");
     await Promise.all(background.work);
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ threadTs: "1.0" }), expect.objectContaining({ id: "mana" }));
   });
 
-  it("acks quickly and skips the generic receipt when no source thread is available", async () => {
+  it("updates the selector quickly even when no source thread is available", async () => {
     let releaseTenant!: (effects: TenantInteractionEffects) => void;
     const tenantGate = new Promise<TenantInteractionEffects>((resolve) => { releaseTenant = resolve; });
     const payload = basePayload("mana_meeting_minutes_choose_destination", {
@@ -427,7 +447,8 @@ describe("meeting minutes routing feedback", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(updateBeforeTenant).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(updateBeforeTenant).toHaveBeenCalledOnce());
+    expectImmediateNavigationFeedback(updateBeforeTenant.mock.calls[0]?.[1], "処理の開始を確認しています…");
     expect(background.work).toHaveLength(1);
     releaseTenant(await tenantBoundary.resolveTenantEffects({
       app_id: "A1", workspace_id: "T1", event_id: "slack-interaction-feedback",

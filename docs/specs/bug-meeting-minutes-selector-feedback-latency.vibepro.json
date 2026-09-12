@@ -1,0 +1,43 @@
+{
+  "schema_version": "0.1.0",
+  "story_id": "bug-meeting-minutes-selector-feedback-latency",
+  "generated_by": { "caller": "codex", "stage": "implementation" },
+  "clauses": [
+    {
+      "id": "C-001",
+      "type": "contract",
+      "statement": "署名、app、operator、action値、ローカル保存先カタログの検証後、一覧ナビゲーションとチャンネル選択はテナント権限解決と並行して固定文面で元メッセージを置き換える",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-1" }, { "kind": "acceptance_criteria", "ac_id": "AC-2" }],
+        "code_refs": [{ "file": "packages/cloud-runtime/src/slack-interactions.ts" }],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-routing-feedback.test.ts", "case": "acknowledges immediately while project navigation waits for tenant authority" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-routing-feedback.test.ts", "must_cover": "waits for tenant authority" }] },
+      "confidence": 0.99
+    },
+    {
+      "id": "INV-001",
+      "type": "invariant",
+      "statement": "認証前の一覧進捗表示は固定文面だけを含み、run、ファイル、組織、プロジェクト、チャンネル、利用者、テナント情報を含めない",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-3" }],
+        "code_refs": [{ "file": "packages/cloud-runtime/src/slack-interactions.ts" }],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-routing-feedback.test.ts", "case": "acknowledges immediately while workspace navigation waits for tenant authority" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-routing-feedback.test.ts", "must_cover": "ImmediateNavigationFeedback" }] },
+      "confidence": 0.99
+    },
+    {
+      "id": "OBS-001",
+      "type": "contract",
+      "statement": "一覧進捗表示の配信完了を selector_progress と elapsed_ms を持つ構造化ログで観測できる",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-5" }],
+        "code_refs": [{ "file": "packages/cloud-runtime/src/slack-interactions.ts" }],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-routing-feedback.test.ts" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-routing-feedback.test.ts", "must_cover": "selector_progress" }] },
+      "confidence": 0.95
+    }
+  ]
+}

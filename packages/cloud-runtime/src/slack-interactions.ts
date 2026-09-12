@@ -976,22 +976,29 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     const pending: Promise<void>[] = [];
     // Keep nested projections and queue work in the same waitUntil lifetime.
     options = { ...options, defer: (work) => { pending.push(work); } };
-    // A signed, locally validated action may receive a generic source-thread
-    // receipt before tenant/queue work. response_url thread replies require
-    // in_channel; include no tenant/catalog/run/user data and never replace the
-    // shared message. Without a source thread, omit this optional receipt.
+    // A signed, locally validated navigation action may replace the selector
+    // with a fixed progress message before tenant authority. This makes the
+    // clicked control react immediately without exposing catalog, run, file,
+    // tenant, or user data. Other actions keep the generic source-thread receipt.
     // Detailed projections and all work still require the tenant boundary.
     const receiptUrl = slackResponseUrl(payload?.response_url);
     const projectReceipt = options.updateBeforeTenant;
-    if (receiptUrl && projectReceipt && threadTsCandidates[0] && !redoAction && !confirmRedoAction &&
-      (!destinationAction || selectedDestination)) {
-      const text = "操作を受け付けました。確認しています。";
-      const receipt: SlackInteractionMessage = { replace_original: false, response_type: "in_channel",
-        thread_ts: threadTsCandidates[0], text,
-        blocks: [{ type: "section", text: { type: "plain_text", text } }] };
+    const navigationFeedbackText = organizationAction ? "プロジェクト一覧を開いています…"
+      : backAction ? "ワークスペース一覧を開いています…"
+      : destinationAction && selectedDestination ? "処理の開始を確認しています…" : undefined;
+    if (receiptUrl && projectReceipt && !redoAction && !confirmRedoAction &&
+      (navigationFeedbackText || (threadTsCandidates[0] && (!destinationAction || selectedDestination)))) {
+      const text = navigationFeedbackText ?? "操作を受け付けました。確認しています。";
+      const receipt: SlackInteractionMessage = navigationFeedbackText
+        ? { replace_original: true, text,
+          blocks: [{ type: "section", text: { type: "plain_text", text } }] }
+        : { replace_original: false, response_type: "in_channel",
+          thread_ts: threadTsCandidates[0], text,
+          blocks: [{ type: "section", text: { type: "plain_text", text } }] };
       pending.push(Promise.resolve().then(() => projectReceipt(receiptUrl, receipt)).then(() => {
         console.info(JSON.stringify({ event: "meeting_minutes_interaction_receipt_delivered", interactionId,
           actionId, runId: string(actionValue?.runId), channel_id: interactionChannelId,
+          feedback_kind: navigationFeedbackText ? "selector_progress" : "thread_receipt",
           elapsed_ms: Date.now() - receivedAt }));
       }).catch(() => {
         console.error(JSON.stringify({ event: "meeting_minutes_interaction_receipt_failed", interactionId,

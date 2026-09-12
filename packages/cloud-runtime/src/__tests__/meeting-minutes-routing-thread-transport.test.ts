@@ -104,7 +104,7 @@ describe("meeting minutes routing thread transport", () => {
       actionId: "mana_meeting_minutes_choose_destination",
       value: { runId: "Ev1_F1", destinationId: "mana", fileName: "Meeting secret.txt" },
     },
-  ])("sends the $name receipt to the validated source thread before tenant resolution", async ({ actionId, value }) => {
+  ])("sends the $name feedback before tenant resolution", async ({ actionId, value }) => {
     let releaseTenant!: (effects: TenantInteractionEffects) => void;
     const tenantGate = new Promise<TenantInteractionEffects>((resolve) => { releaseTenant = resolve; });
     const slackFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true })));
@@ -142,7 +142,18 @@ describe("meeting minutes routing thread transport", () => {
       expect(url).toBe(responseUrl);
       expect(init).toMatchObject({ method: "POST", redirect: "manual" });
       const receipt = JSON.parse(String(init.body)) as Record<string, unknown>;
-      expect(receipt).toEqual({
+      const navigationText = actionId.startsWith("mana_meeting_minutes_choose_organization:")
+        ? "プロジェクト一覧を開いています…"
+        : actionId === "mana_meeting_minutes_back_to_organizations"
+        ? "ワークスペース一覧を開いています…"
+        : actionId === "mana_meeting_minutes_choose_destination"
+        ? "処理の開始を確認しています…"
+        : undefined;
+      expect(receipt).toEqual(navigationText ? {
+        replace_original: true,
+        text: navigationText,
+        blocks: [{ type: "section", text: { type: "plain_text", text: navigationText } }],
+      } : {
         replace_original: false,
         response_type: "in_channel",
         thread_ts: "1.0",
