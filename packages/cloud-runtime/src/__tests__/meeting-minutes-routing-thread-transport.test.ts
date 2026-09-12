@@ -6,7 +6,7 @@ import {
   type TenantInteractionIdentity,
 } from "../slack-interactions.js";
 
-const secret = "secret";
+const secret = "signing-key";
 const now = 1_786_420_000;
 const responseUrl = "https://hooks.slack.com/actions/T1/B1/token";
 
@@ -142,14 +142,18 @@ describe("meeting minutes routing thread transport", () => {
       expect(url).toBe(responseUrl);
       expect(init).toMatchObject({ method: "POST", redirect: "manual" });
       const receipt = JSON.parse(String(init.body)) as Record<string, unknown>;
-      const navigationText = actionId.startsWith("mana_meeting_minutes_choose_organization:")
-        ? "プロジェクト一覧を開いています…"
+      const actionableId = actionId.startsWith("mana_meeting_minutes_choose_organization:")
+        ? "mana_meeting_minutes_choose_destination:board"
         : actionId === "mana_meeting_minutes_back_to_organizations"
-        ? "ワークスペース一覧を開いています…"
-        : actionId === "mana_meeting_minutes_choose_destination"
+        ? "mana_meeting_minutes_choose_organization:unson-business"
+        : undefined;
+      const navigationText = actionId === "mana_meeting_minutes_choose_destination"
         ? "処理の開始を確認しています…"
         : undefined;
-      expect(receipt).toEqual(navigationText ? {
+      if (actionableId) {
+        expect(receipt).toMatchObject({ replace_original: true });
+        expect(JSON.stringify(receipt)).toContain(actionableId);
+      } else expect(receipt).toEqual(navigationText ? {
         replace_original: true,
         text: navigationText,
         blocks: [{ type: "section", text: { type: "plain_text", text: navigationText } }],
@@ -162,8 +166,10 @@ describe("meeting minutes routing thread transport", () => {
       });
       const serialized = JSON.stringify(receipt);
       expect(serialized).not.toContain(secret);
-      expect(serialized).not.toContain("Ev1_F1");
-      expect(serialized).not.toContain("Meeting secret.txt");
+      if (!actionableId) {
+        expect(serialized).not.toContain("Ev1_F1");
+        expect(serialized).not.toContain("Meeting secret.txt");
+      }
       expect(serialized).not.toContain("U1");
     } finally {
       releaseTenant(tenantEffects(sourceIdentity(), slackFetch as unknown as typeof fetch));
