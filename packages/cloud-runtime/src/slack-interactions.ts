@@ -473,6 +473,7 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
   const backAction = actionId === MEETING_MINUTES_BACK_TO_ORGANIZATIONS_ACTION_ID;
   const redoAction = actionId === MEETING_MINUTES_REDO_ACTION_ID;
   const confirmRedoAction = actionId === MEETING_MINUTES_CONFIRM_REDO_ACTION_ID;
+  let immediateNavigationDelivered = false;
   const actionOrganizationId = organizationAction
     ? actionId?.slice(`${MEETING_MINUTES_CHOOSE_ORGANIZATION_ACTION_ID}:`.length)
     : undefined;
@@ -627,7 +628,7 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     ? destinationSelectedMessage(pendingRunId, pendingFileName, selectedDestination)
     : undefined;
   let destinationPendingProjectionFailed = false;
-  if (responseUrl && options.updateOriginal && pendingMessage) {
+  if (responseUrl && options.updateOriginal && pendingMessage && !immediateNavigationDelivered) {
     const pendingKind = organizationAction ? "project_selection_pending"
       : backAction ? "organization_selection_pending"
       : "destination_confirmation";
@@ -836,6 +837,7 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
         ? projectSelectionMessage(runId, fileName, organizationId ?? "", destinations, sourceThreadTs)
         : organizationSelectionMessage(runId, fileName, destinations, sourceThreadTs);
     } catch { return response("slack_interaction_invalid", 400); }
+    if (immediateNavigationDelivered) return Response.json({ ok: true });
     options.defer((async () => {
       try {
         await guardedSlackEffect(tenantEffects, `destination-menu:${runId}:${organizationId ?? "root"}`,
@@ -977,30 +979,44 @@ export async function handleMeetingMinutesInteraction(request: Request, options:
     const pending: Promise<void>[] = [];
     // Keep nested projections and queue work in the same waitUntil lifetime.
     options = { ...options, defer: (work) => { pending.push(work); } };
-    // A signed, locally validated navigation action may replace the selector
-    // with a fixed progress message before tenant authority. This makes the
-    // clicked control react immediately without exposing catalog, run, file,
-    // tenant, or user data. Other actions keep the generic source-thread receipt.
-    // Detailed projections and all work still require the tenant boundary.
+    // A signed, locally validated navigation action can project its next
+    // actionable selector immediately. The operator, action value, app,
+    // workspace coordinates, response URL, and local destination catalog have
+    // all been validated above; tenant authority still gates every durable or
+    // external side effect that follows this navigation-only projection.
     const receiptUrl = slackResponseUrl(payload?.response_url);
     const projectReceipt = options.updateBeforeTenant;
-    const navigationFeedbackText = organizationAction ? "プロジェクト一覧を開いています…"
-      : backAction ? "ワークスペース一覧を開いています…"
-      : destinationAction && selectedDestination ? "処理の開始を確認しています…" : undefined;
+    let navigationMessage: SlackInteractionMessage | undefined;
+    if (organizationAction && destinations) {
+      navigationMessage = projectSelectionMessage(string(actionValue?.runId) ?? "",
+        string(actionValue?.fileName) ?? "", string(actionValue?.organizationId) ?? "", destinations,
+        threadTsCandidates[0]);
+    } else if (backAction && destinations) {
+      navigationMessage = organizationSelectionMessage(string(actionValue?.runId) ?? "",
+        string(actionValue?.fileName) ?? "", destinations, threadTsCandidates[0]);
+    }
+    const navigationFeedbackText = destinationAction && selectedDestination
+      ? "処理の開始を確認しています…" : undefined;
     let immediateReceipt: Promise<void> | undefined;
     if (receiptUrl && projectReceipt && !redoAction && !confirmRedoAction &&
-      (navigationFeedbackText || (threadTsCandidates[0] && (!destinationAction || selectedDestination)))) {
+      (navigationMessage || navigationFeedbackText ||
+        (threadTsCandidates[0] && (!destinationAction || selectedDestination)))) {
       const text = navigationFeedbackText ?? "操作を受け付けました。確認しています。";
-      const receipt: SlackInteractionMessage = navigationFeedbackText
+      const receipt: SlackInteractionMessage = navigationMessage ?? (navigationFeedbackText
         ? { replace_original: true, text,
           blocks: [{ type: "section", text: { type: "plain_text", text } }] }
         : { replace_original: false, response_type: "in_channel",
           thread_ts: threadTsCandidates[0], text,
-          blocks: [{ type: "section", text: { type: "plain_text", text } }] };
+          blocks: [{ type: "section", text: { type: "plain_text", text } }] });
       immediateReceipt = Promise.resolve().then(() => projectReceipt(receiptUrl, receipt)).then(() => {
-        console.info(JSON.stringify({ event: "meeting_minutes_interaction_receipt_delivered", interactionId,
+        if (navigationMessage) immediateNavigationDelivered = true;
+        console.info(JSON.stringify({
+          event: navigationMessage ? "meeting_minutes_interaction_next_action_delivered"
+            : "meeting_minutes_interaction_receipt_delivered", interactionId,
           actionId, runId: string(actionValue?.runId), channel_id: interactionChannelId,
-          feedback_kind: navigationFeedbackText ? "selector_progress" : "thread_receipt",
+          feedback_kind: navigationMessage
+            ? organizationAction ? "project_selection" : "organization_selection"
+            : navigationFeedbackText ? "selector_progress" : "thread_receipt",
           elapsed_ms: Date.now() - receivedAt }));
       }).catch(() => {
         console.error(JSON.stringify({ event: "meeting_minutes_interaction_receipt_failed", interactionId,

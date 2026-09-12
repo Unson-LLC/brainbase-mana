@@ -129,6 +129,11 @@ function expectImmediateNavigationFeedback(message: unknown, text: string) {
   expect(serialized).not.toContain("tech-knight");
 }
 
+function expectActionableNavigation(message: unknown, actionId: string) {
+  expect(message).toMatchObject({ replace_original: true });
+  expect(JSON.stringify(message)).toContain(actionId);
+}
+
 describe("meeting minutes routing feedback", () => {
   it.each([
     {
@@ -183,18 +188,20 @@ describe("meeting minutes routing feedback", () => {
 
     expect(response.status).toBe(200);
     const isRedo = actionId === "mana_meeting_minutes_redo" || actionId === "mana_meeting_minutes_confirm_redo";
-    const navigationText = actionId.startsWith("mana_meeting_minutes_choose_organization:")
-      ? "プロジェクト一覧を開いています…"
+    const nextActionId = actionId.startsWith("mana_meeting_minutes_choose_organization:")
+      ? "mana_meeting_minutes_choose_destination:board"
       : actionId === "mana_meeting_minutes_back_to_organizations"
-      ? "ワークスペース一覧を開いています…"
-      : actionId === "mana_meeting_minutes_choose_destination"
+      ? "mana_meeting_minutes_choose_organization:unson-business"
+      : undefined;
+    const navigationText = actionId === "mana_meeting_minutes_choose_destination"
       ? "処理の開始を確認しています…"
       : undefined;
     if (isRedo) {
       expect(updateBeforeTenant).not.toHaveBeenCalled();
     } else {
       await vi.waitFor(() => expect(updateBeforeTenant).toHaveBeenCalledOnce());
-      if (navigationText) expectImmediateNavigationFeedback(updateBeforeTenant.mock.calls[0]?.[1], navigationText);
+      if (nextActionId) expectActionableNavigation(updateBeforeTenant.mock.calls[0]?.[1], nextActionId);
+      else if (navigationText) expectImmediateNavigationFeedback(updateBeforeTenant.mock.calls[0]?.[1], navigationText);
       else expectGenericReceipt(updateBeforeTenant.mock.calls[0]?.[1]);
     }
     await vi.waitFor(() => expect(resolveTenantEffects).toHaveBeenCalledOnce());
@@ -205,7 +212,8 @@ describe("meeting minutes routing feedback", () => {
     releaseTenant(await tenantBoundary.resolveTenantEffects(feedbackTenantIdentity()));
     await Promise.all(background.work);
     expect(isIntakePaused).toHaveBeenCalledOnce();
-    expect(updateOriginal).toHaveBeenCalled();
+    if (nextActionId) expect(updateOriginal).not.toHaveBeenCalled();
+    else expect(updateOriginal).toHaveBeenCalled();
     if (isRedo) {
       expect(updateOriginal).toHaveBeenCalledOnce();
       expectRedoEphemeralMessage(updateOriginal.mock.calls[0]?.[1]);
