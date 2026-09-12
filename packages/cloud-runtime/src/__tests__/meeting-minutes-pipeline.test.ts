@@ -1238,6 +1238,31 @@ describe("meeting minutes pipeline", () => {
     expect(reopened.taskRegistration).toBeUndefined();
   });
 
+  it("continues redo when canonical readiness proves a pending task was rejected before creation", async () => {
+    const fs = new MemoryFs(); await startMeetingMinutesRuns(fs, event, { enabled: true, routerChannelId: "CROUTER", sourceAppId: "A1",
+      destinations: [destination], requestDestination: vi.fn().mockResolvedValue("2.1") });
+    await resumeMeetingMinutesRun(fs, selection, resumeOptions({
+      generate: vi.fn().mockResolvedValue({ title: "定例", overview: "概要", body: "本文",
+        tasks: [{ title: "今回作成するタスク" }] }),
+    }));
+    const persisted = (await loadMeetingMinutesRun(fs, selection.runId))!;
+    persisted.taskRegistration!.pending = { index: 1, idempotencyKey: "pending-rejected-before-mutation",
+      input: { title: "作成されなかったタスク", project_codes: ["mana"] } };
+    await saveMeetingMinutesRun(fs, persisted);
+    const createTask = vi.fn().mockRejectedValue(new TaskApiError(503,
+      "canonical_task_mutation_not_ready", "Canonical Task mutation is not ready"));
+    const deleteTask = vi.fn();
+
+    const reopened = await redoMeetingMinutesRun(fs, redo, { destinations: [destination], createTask,
+      deleteGitHub: vi.fn(), deleteTask, retractSharedMinutes: vi.fn(),
+      showDestinationSelection: vi.fn().mockResolvedValue("3.1") });
+
+    expect(createTask).toHaveBeenCalledOnce();
+    expect(deleteTask).toHaveBeenCalledTimes(1);
+    expect(deleteTask).toHaveBeenCalledWith("task-1", "meeting-minutes-redo-Ev1_F1-revision-0-0");
+    expect(reopened).toMatchObject({ status: "awaiting_destination", revision: 1 });
+  });
+
   it("keeps an ambiguous pending task without starting redo cleanup", async () => {
     const fs = new MemoryFs(); await startMeetingMinutesRuns(fs, event, { enabled: true, routerChannelId: "CROUTER", sourceAppId: "A1",
       destinations: [destination], requestDestination: vi.fn().mockResolvedValue("2.1") });
