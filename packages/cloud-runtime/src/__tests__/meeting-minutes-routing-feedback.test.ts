@@ -182,7 +182,6 @@ describe("meeting minutes routing feedback", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(resolveTenantEffects).toHaveBeenCalledOnce();
     const isRedo = actionId === "mana_meeting_minutes_redo" || actionId === "mana_meeting_minutes_confirm_redo";
     const navigationText = actionId.startsWith("mana_meeting_minutes_choose_organization:")
       ? "プロジェクト一覧を開いています…"
@@ -198,6 +197,7 @@ describe("meeting minutes routing feedback", () => {
       if (navigationText) expectImmediateNavigationFeedback(updateBeforeTenant.mock.calls[0]?.[1], navigationText);
       else expectGenericReceipt(updateBeforeTenant.mock.calls[0]?.[1]);
     }
+    await vi.waitFor(() => expect(resolveTenantEffects).toHaveBeenCalledOnce());
     expect(updateOriginal).not.toHaveBeenCalled();
     expect(isIntakePaused).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
@@ -217,6 +217,7 @@ describe("meeting minutes routing feedback", () => {
   it("keeps the HTTP acknowledgement and routing work when the generic receipt fails", async () => {
     let releaseTenant!: (effects: TenantInteractionEffects) => void;
     const tenantGate = new Promise<TenantInteractionEffects>((resolve) => { releaseTenant = resolve; });
+    const resolveTenantEffects = vi.fn(() => tenantGate);
     const updateBeforeTenant = vi.fn().mockRejectedValue(new Error("response_url timeout"));
     const updateOriginal = vi.fn().mockResolvedValue(undefined);
     const send = vi.fn().mockResolvedValue(undefined);
@@ -230,7 +231,7 @@ describe("meeting minutes routing feedback", () => {
       operatorUserIds: new Set(["U1"]),
       nowMs: now * 1000,
       ...tenantBoundary,
-      resolveTenantEffects: vi.fn(() => tenantGate),
+      resolveTenantEffects,
       destinations,
       send,
       updateBeforeTenant,
@@ -248,12 +249,13 @@ describe("meeting minutes routing feedback", () => {
     expect(send).toHaveBeenCalledOnce();
   });
 
-  it("lets tenant, intake, and send progress while the receipt is still pending", async () => {
+  it("delivers selector progress before tenant, intake, and send work starts", async () => {
     let releaseReceipt!: () => void;
     const receiptGate = new Promise<void>((resolve) => { releaseReceipt = resolve; });
     const updateBeforeTenant = vi.fn(() => receiptGate);
     let releaseTenant!: (effects: TenantInteractionEffects) => void;
     const tenantGate = new Promise<TenantInteractionEffects>((resolve) => { releaseTenant = resolve; });
+    const resolveTenantEffects = vi.fn(() => tenantGate);
     const updateOriginal = vi.fn().mockResolvedValue(undefined);
     const send = vi.fn().mockResolvedValue(undefined);
     const background = deferred();
@@ -266,7 +268,7 @@ describe("meeting minutes routing feedback", () => {
       operatorUserIds: new Set(["U1"]),
       nowMs: now * 1000,
       ...tenantBoundary,
-      resolveTenantEffects: vi.fn(() => tenantGate),
+      resolveTenantEffects,
       destinations,
       send,
       updateBeforeTenant,
@@ -278,13 +280,17 @@ describe("meeting minutes routing feedback", () => {
 
     expect(response.status).toBe(200);
     await vi.waitFor(() => expect(updateBeforeTenant).toHaveBeenCalledOnce());
-    releaseTenant(await tenantBoundary.resolveTenantEffects(feedbackTenantIdentity()));
-    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
-    expect(updateOriginal).toHaveBeenCalled();
+    expect(resolveTenantEffects).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(updateOriginal).not.toHaveBeenCalled();
     expect(updateBeforeTenant).toHaveBeenCalledOnce();
 
     releaseReceipt();
+    await vi.waitFor(() => expect(resolveTenantEffects).toHaveBeenCalledOnce());
+    releaseTenant(await tenantBoundary.resolveTenantEffects(feedbackTenantIdentity()));
     await Promise.all(background.work);
+    expect(send).toHaveBeenCalledOnce();
+    expect(updateOriginal).toHaveBeenCalled();
   });
 
   it.each([

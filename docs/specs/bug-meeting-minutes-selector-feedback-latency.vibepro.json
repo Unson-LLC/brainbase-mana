@@ -38,6 +38,18 @@
       },
       "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-routing-feedback.test.ts", "must_cover": "selector_progress" }] },
       "confidence": 0.95
+    },
+    {
+      "id": "SLO-001",
+      "type": "contract",
+      "statement": "HTTP受付と一覧進捗表示を後続処理から分離し、受付は1000ms未満、一覧進捗表示の通信上限は800msとする",
+      "origin": {
+        "story_refs": [{ "kind": "acceptance_criteria", "ac_id": "AC-6" }, { "kind": "acceptance_criteria", "ac_id": "AC-7" }],
+        "code_refs": [{ "file": "packages/cloud-runtime/src/slack-interactions.ts" }],
+        "test_refs": [{ "file": "packages/cloud-runtime/src/__tests__/meeting-minutes-routing-feedback.test.ts", "case": "delivers selector progress before tenant, intake, and send work starts" }]
+      },
+      "verifiable_by": { "test_pattern": [{ "file_glob": "packages/cloud-runtime/src/__tests__/meeting-minutes-routing-feedback.test.ts", "must_cover": "delivers selector progress before tenant" }] },
+      "confidence": 0.99
     }
   ]
 }

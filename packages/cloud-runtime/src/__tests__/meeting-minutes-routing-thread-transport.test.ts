@@ -134,10 +134,10 @@ describe("meeting minutes routing thread transport", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("");
-    expect(resolveTenantEffects).toHaveBeenCalledOnce();
 
     try {
       await vi.waitFor(() => expect(slackFetch).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(resolveTenantEffects).toHaveBeenCalledOnce());
       const [url, init] = slackFetch.mock.calls[0] as [string, RequestInit];
       expect(url).toBe(responseUrl);
       expect(init).toMatchObject({ method: "POST", redirect: "manual" });
