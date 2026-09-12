@@ -455,10 +455,16 @@ export async function redoMeetingMinutesRun(fs: WorkspaceFs, command: MeetingMin
           taskId: recoveredTask.id.trim(), projectCodes: [...(pendingTask.input.project_codes ?? [])] });
       } catch (error) {
         // Brainbase's readiness guard returns this response before any canonical
-        // mutation.  The durable pending marker is therefore known not to have
-        // produced a task and can be cleared without leaving an orphan behind.
+        // mutation. Clear the durable marker only when the original attempt
+        // persisted the same pre-mutation rejection; a pending marker alone
+        // cannot exclude an earlier commit whose response was lost.
+        const originalFailure = run.taskRegistration?.failure;
         if (!(error instanceof TaskApiError) || error.status !== 503
-          || error.code !== "canonical_task_mutation_not_ready") throw error;
+          || error.code !== "canonical_task_mutation_not_ready"
+          || originalFailure?.index !== pendingTask.index
+          || originalFailure.failurePoint !== "task_create"
+          || originalFailure.status !== 503
+          || originalFailure.code !== "canonical_task_mutation_not_ready") throw error;
       }
       delete run.taskRegistration!.pending;
       run.updatedAt = now(options);

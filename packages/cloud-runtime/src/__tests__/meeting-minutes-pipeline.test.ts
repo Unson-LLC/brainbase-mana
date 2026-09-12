@@ -1248,6 +1248,9 @@ describe("meeting minutes pipeline", () => {
     const persisted = (await loadMeetingMinutesRun(fs, selection.runId))!;
     persisted.taskRegistration!.pending = { index: 1, idempotencyKey: "pending-rejected-before-mutation",
       input: { title: "作成されなかったタスク", project_codes: ["mana"] } };
+    persisted.taskRegistration!.failure = { index: 1, failurePoint: "task_create", status: 503,
+      code: "canonical_task_mutation_not_ready", message: "canonical_task_mutation_not_ready",
+      failedAt: "2026-09-12T00:00:00.000Z" };
     await saveMeetingMinutesRun(fs, persisted);
     const createTask = vi.fn().mockRejectedValue(new TaskApiError(503,
       "canonical_task_mutation_not_ready", "Canonical Task mutation is not ready"));
@@ -1261,6 +1264,31 @@ describe("meeting minutes pipeline", () => {
     expect(deleteTask).toHaveBeenCalledTimes(1);
     expect(deleteTask).toHaveBeenCalledWith("task-1", "meeting-minutes-redo-Ev1_F1-revision-0-0");
     expect(reopened).toMatchObject({ status: "awaiting_destination", revision: 1 });
+  });
+
+  it("keeps pending when only the retry has a pre-mutation rejection", async () => {
+    const fs = new MemoryFs(); await startMeetingMinutesRuns(fs, event, { enabled: true, routerChannelId: "CROUTER", sourceAppId: "A1",
+      destinations: [destination], requestDestination: vi.fn().mockResolvedValue("2.1") });
+    await resumeMeetingMinutesRun(fs, selection, resumeOptions({
+      generate: vi.fn().mockResolvedValue({ title: "定例", overview: "概要", body: "本文",
+        tasks: [{ title: "今回作成するタスク" }] }),
+    }));
+    const persisted = (await loadMeetingMinutesRun(fs, selection.runId))!;
+    const pending = { index: 1, idempotencyKey: "pending-with-unknown-original-outcome",
+      input: { title: "結果不明のタスク", project_codes: ["mana"] } };
+    persisted.taskRegistration!.pending = pending;
+    await saveMeetingMinutesRun(fs, persisted);
+    const createTask = vi.fn().mockRejectedValue(new TaskApiError(503,
+      "canonical_task_mutation_not_ready", "Canonical Task mutation is not ready"));
+    const deleteGitHub = vi.fn(); const deleteTask = vi.fn();
+
+    await expect(redoMeetingMinutesRun(fs, redo, { destinations: [destination], createTask,
+      deleteGitHub, deleteTask, retractSharedMinutes: vi.fn(), showDestinationSelection: vi.fn() }))
+      .rejects.toMatchObject({ code: "canonical_task_mutation_not_ready" });
+
+    expect(deleteGitHub).not.toHaveBeenCalled();
+    expect(deleteTask).not.toHaveBeenCalled();
+    expect((await loadMeetingMinutesRun(fs, selection.runId))?.taskRegistration?.pending).toEqual(pending);
   });
 
   it("keeps an ambiguous pending task without starting redo cleanup", async () => {
