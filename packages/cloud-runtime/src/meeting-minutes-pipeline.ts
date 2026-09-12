@@ -56,6 +56,7 @@ export interface ResumeMeetingMinutesOptions {
 }
 export interface RedoMeetingMinutesOptions {
   destinations: readonly MeetingMinutesDestination[]; now?: () => Date;
+  createTask?(input: CreateTaskInput, idempotencyKey: string): Promise<{ id: string }>;
   deleteGitHub(destination: MeetingMinutesDestination, paths: readonly string[]): Promise<void>;
   deleteTask(taskId: string, idempotencyKey: string): Promise<void>;
   retractSharedMinutes(destination: MeetingMinutesDestination, parentTs: string, fileName: string): Promise<void>;
@@ -440,9 +441,20 @@ export async function redoMeetingMinutesRun(fs: WorkspaceFs, command: MeetingMin
   let redoStage: MeetingMinutesRedoStage = "redo_github_delete";
   try {
     delete redoState.failure;
-    if (run.taskRegistration?.pending) {
+    const pendingTask = run.taskRegistration?.pending;
+    if (pendingTask) {
       redoStage = "redo_task_delete";
-      throw new Error("meeting_minutes_redo_task_registration_pending");
+      if (run.taskRegistration!.registered.some((task) => task.index === pendingTask.index)) {
+        throw new Error("meeting_minutes_redo_task_registration_pending_ambiguous");
+      }
+      if (!options.createTask) throw new Error("meeting_minutes_redo_task_registration_recovery_unavailable");
+      const recoveredTask = await options.createTask(pendingTask.input, pendingTask.idempotencyKey);
+      if (!recoveredTask.id?.trim()) throw new Error("meeting_minutes_redo_task_invalid_response");
+      run.taskRegistration!.registered.push({ index: pendingTask.index, title: pendingTask.input.title,
+        taskId: recoveredTask.id.trim(), projectCodes: [...(pendingTask.input.project_codes ?? [])] });
+      delete run.taskRegistration!.pending;
+      run.updatedAt = now(options);
+      await saveMeetingMinutesRun(fs, run);
     }
     if (!redoState.githubDeletedAt) {
       await options.deleteGitHub(run.destination, [run.github.transcriptPath, run.github.minutesPath]);

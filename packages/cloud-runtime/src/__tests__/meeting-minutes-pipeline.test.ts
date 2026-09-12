@@ -1210,7 +1210,7 @@ describe("meeting minutes pipeline", () => {
     expect(deleteTask).not.toHaveBeenCalledWith("task-removed", expect.any(String));
   });
 
-  it("fails closed when task registration is still pending before external cleanup", async () => {
+  it("recovers a pending task with the same idempotent request before redo cleanup", async () => {
     const fs = new MemoryFs(); await startMeetingMinutesRuns(fs, event, { enabled: true, routerChannelId: "CROUTER", sourceAppId: "A1",
       destinations: [destination], requestDestination: vi.fn().mockResolvedValue("2.1") });
     await resumeMeetingMinutesRun(fs, selection, resumeOptions({
@@ -1222,25 +1222,43 @@ describe("meeting minutes pipeline", () => {
       input: { title: "未完了のタスク", project_codes: ["mana"] } };
     persisted.taskRegistration!.pending = pending;
     await saveMeetingMinutesRun(fs, persisted);
+    const createTask = vi.fn().mockResolvedValue({ id: "task-pending" });
     const deleteGitHub = vi.fn(); const deleteTask = vi.fn(); const retractSharedMinutes = vi.fn();
-    const showDestinationSelection = vi.fn(); const showRedoFailure = vi.fn();
+    const showDestinationSelection = vi.fn().mockResolvedValue("3.1"); const showRedoFailure = vi.fn();
 
-    await expect(redoMeetingMinutesRun(fs, redo, { destinations: [destination], deleteGitHub, deleteTask,
-      retractSharedMinutes, showDestinationSelection, showRedoFailure })).rejects
-      .toThrow("meeting_minutes_redo_task_registration_pending");
+    const reopened = await redoMeetingMinutesRun(fs, redo, { destinations: [destination], createTask,
+      deleteGitHub, deleteTask, retractSharedMinutes, showDestinationSelection, showRedoFailure });
 
+    expect(createTask).toHaveBeenCalledWith(pending.input, pending.idempotencyKey);
+    expect(deleteTask).toHaveBeenCalledWith("task-pending", "meeting-minutes-redo-Ev1_F1-revision-0-1");
+    expect(deleteTask).toHaveBeenCalledWith("task-1", "meeting-minutes-redo-Ev1_F1-revision-0-0");
+    expect(showDestinationSelection).toHaveBeenCalledOnce();
+    expect(showRedoFailure).not.toHaveBeenCalled();
+    expect(reopened).toMatchObject({ status: "awaiting_destination", revision: 1 });
+    expect(reopened.taskRegistration).toBeUndefined();
+  });
+
+  it("keeps an ambiguous pending task without starting redo cleanup", async () => {
+    const fs = new MemoryFs(); await startMeetingMinutesRuns(fs, event, { enabled: true, routerChannelId: "CROUTER", sourceAppId: "A1",
+      destinations: [destination], requestDestination: vi.fn().mockResolvedValue("2.1") });
+    await resumeMeetingMinutesRun(fs, selection, resumeOptions({
+      generate: vi.fn().mockResolvedValue({ title: "定例", overview: "概要", body: "本文", tasks: [{ title: "確認する" }] }),
+    }));
+    const persisted = (await loadMeetingMinutesRun(fs, selection.runId))!;
+    const pending = { index: 0, idempotencyKey: "pending-conflicts-with-registered-index",
+      input: { title: "曖昧な未確定タスク", project_codes: ["mana"] } };
+    persisted.taskRegistration!.pending = pending;
+    await saveMeetingMinutesRun(fs, persisted);
+    const createTask = vi.fn(); const deleteGitHub = vi.fn(); const deleteTask = vi.fn();
+
+    await expect(redoMeetingMinutesRun(fs, redo, { destinations: [destination], createTask, deleteGitHub, deleteTask,
+      retractSharedMinutes: vi.fn(), showDestinationSelection: vi.fn() })).rejects
+      .toThrow("meeting_minutes_redo_task_registration_pending_ambiguous");
+
+    expect(createTask).not.toHaveBeenCalled();
     expect(deleteGitHub).not.toHaveBeenCalled();
     expect(deleteTask).not.toHaveBeenCalled();
-    expect(retractSharedMinutes).not.toHaveBeenCalled();
-    expect(showDestinationSelection).not.toHaveBeenCalled();
-    expect(showRedoFailure).toHaveBeenCalledOnce();
-    expect(await loadMeetingMinutesRun(fs, selection.runId)).toMatchObject({ status: "completed",
-      taskRegistration: { pending },
-      redo: { revision: 0, deletedTaskIds: [], failure: {
-        message: "REDO_TASK_REGISTRATION_PENDING", stage: "redo_task_delete",
-        code: "REDO_TASK_REGISTRATION_PENDING", retryable: false,
-      } },
-    });
+    expect((await loadMeetingMinutesRun(fs, selection.runId))?.taskRegistration?.pending).toEqual(pending);
   });
 
   it("resumes a partially completed redo without repeating finished cleanup", async () => {
