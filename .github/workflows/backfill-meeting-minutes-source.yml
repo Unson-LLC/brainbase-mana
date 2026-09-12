@@ -11,6 +11,14 @@ on:
         description: 元投稿の文字起こしfile ID
         required: true
         type: string
+      source_app_id:
+        description: 元投稿を認証する送信元（Zapier原文または管理者の手動復旧投稿）
+        required: true
+        default: A024R9PQM
+        type: choice
+        options:
+          - A024R9PQM
+          - A0BPM2J33SN
       reason:
         description: 復旧理由（監査用）
         required: true
@@ -41,6 +49,7 @@ jobs:
         env:
           MESSAGE_TS: ${{ inputs.message_ts }}
           FILE_ID: ${{ inputs.file_id }}
+          SOURCE_APP_ID: ${{ inputs.source_app_id }}
           BACKFILL_REASON: ${{ inputs.reason }}
           RECOVERY_REVISION: ${{ inputs.recovery_revision }}
           SANDBOX_PROBE_TOKEN: ${{ secrets.SANDBOX_PROBE_TOKEN }}
@@ -48,6 +57,7 @@ jobs:
           set -euo pipefail
           [[ "$MESSAGE_TS" =~ ^[0-9]{10}\.[0-9]{6}$ ]]
           [[ "$FILE_ID" =~ ^F[A-Z0-9]{8,31}$ ]]
+          [[ "$SOURCE_APP_ID" == 'A024R9PQM' || "$SOURCE_APP_ID" == 'A0BPM2J33SN' ]]
           test -n "$BACKFILL_REASON"
           if [[ -n "$RECOVERY_REVISION" ]]; then
             [[ "$RECOVERY_REVISION" =~ ^[1-9][0-9]{0,2}$ ]]
@@ -62,7 +72,7 @@ jobs:
             --arg channelId 'C0BKTFQ9V38' \
             --arg messageTs "$MESSAGE_TS" \
             --arg fileId "$FILE_ID" \
-            --arg sourceAppId 'A024R9PQM' \
+            --arg sourceAppId "$SOURCE_APP_ID" \
             --arg recoveryRevision "$RECOVERY_REVISION" \
             '{tenantId:$tenantId,workspaceId:$workspaceId,channelId:$channelId,messageTs:$messageTs,fileId:$fileId,sourceAppId:$sourceAppId}
              + (if $recoveryRevision == "" then {} else {recoveryRevision:($recoveryRevision | tonumber)} end)')"
@@ -95,6 +105,7 @@ jobs:
             echo '## Slack原文からの議事録復旧'
             printf '%s\n' "- 元投稿: \`$MESSAGE_TS\`"
             printf '%s\n' "- file ID: \`$FILE_ID\`"
+            printf '%s\n' "- 送信元app ID: \`$SOURCE_APP_ID\`"
             printf '%s\n' "- 理由: $BACKFILL_REASON"
             if [[ -n "$RECOVERY_REVISION" ]]; then
               printf '%s\n' "- 復旧リビジョン: \`$RECOVERY_REVISION\`"

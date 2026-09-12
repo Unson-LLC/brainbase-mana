@@ -324,6 +324,15 @@ describe("会社別Cloudflare deployment", () => {
     });
   });
 
+  it("binds manual recovery posts to the exact Mana app, router channel, and operator", () => {
+    expect(JSON.parse(unson.vars.MANA_COMPANY_AUTHORITY_SLACK_ROLLOUT_JSON)).toContainEqual({
+      workspace_id: "T0882T8N9UH",
+      channel_id: "C0BKTFQ9V38",
+      source_app_id: "A0BPM2J33SN",
+      authority_subject_id: "U088D1HBY6L",
+    });
+  });
+
   it("keeps every same-tenant task board target inside an enabled runtime placement", () => {
     const targets = parseTaskBoardTargets(unson.vars.TASK_BOARD_TARGETS_JSON) as Array<{
       organizationId: string; workspaceId: string; channelId: string; projectCodes: string[]; enabled: boolean;
